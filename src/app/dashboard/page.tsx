@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, DragEvent } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 
 type Website = {
   _id?: string;
@@ -38,6 +39,7 @@ export default function Dashboard() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
+  const messageTimeoutRef = useRef<number | null>(null);
 
   async function fetchSites() {
     try {
@@ -53,12 +55,23 @@ export default function Dashboard() {
   }
 
   function showMessage(text: string, tone: "success" | "error" | "warning" | "info" | "") {
+    if (messageTimeoutRef.current) {
+      window.clearTimeout(messageTimeoutRef.current);
+      messageTimeoutRef.current = null;
+    }
     setMessage(text);
     setMessageTone(tone);
+    if (text) {
+      messageTimeoutRef.current = window.setTimeout(() => {
+        setMessage("");
+        setMessageTone("");
+      }, 4000);
+    }
   }
 
   async function handleUpload(selectedFile?: File) {
     if (uploading) return;
+
     const uploadFile = selectedFile ?? file;
     if (!uploadFile) {
       showMessage("⚠️ Please select a .zip file.", "warning");
@@ -74,47 +87,60 @@ export default function Dashboard() {
     setUploadProgress(0);
     showMessage("", "");
 
-    const progressTimer = window.setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev === null) return 0;
-        if (prev >= 90) return prev;
-        return Math.min(prev + Math.random() * 15, 90);
-      });
-    }, 200);
-
     const form = new FormData();
     form.append("file", uploadFile);
     form.append("userEmail", "demo@afterweb.dev");
 
-    try {
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      const data = await res.json();
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/upload");
 
-      if (res.ok) {
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        setUploadProgress(percent);
+      }
+    };
+
+    xhr.onload = async () => {
+      setUploading(false);
+      let responseData: { message?: string; error?: string } = {};
+      try {
+        responseData = JSON.parse(xhr.responseText || "{}");
+      } catch (error) {
+        console.warn("Failed to parse upload response", error);
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
         setUploadProgress(100);
-        showMessage(data.message || "✅ Upload successful!", "success");
+        showMessage(responseData.message || "✅ Upload successful!", "success");
         await fetchSites();
+        window.setTimeout(() => setUploadProgress(null), 800);
+        setFile(null);
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
       } else {
         setUploadProgress(null);
-        showMessage(`❌ ${data.error || "Upload failed."}`, "error");
+        showMessage(`❌ ${responseData.error || "Upload failed."}`, "error");
       }
-    } catch (error) {
-      console.error("Upload failed", error);
-      setUploadProgress(null);
-      showMessage("❌ Upload failed — check console for details.", "error");
-    } finally {
-      window.clearInterval(progressTimer);
+    };
+
+    xhr.onerror = () => {
       setUploading(false);
-      setFile(null);
-      setTimeout(() => setUploadProgress(null), 400);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
-    }
+      setUploadProgress(null);
+      showMessage("❌ Network error during upload.", "error");
+    };
+
+    xhr.send(form);
   }
 
   useEffect(() => {
     fetchSites();
+    return () => {
+      if (messageTimeoutRef.current) {
+        window.clearTimeout(messageTimeoutRef.current);
+      }
+    };
   }, []);
 
   function handleDragEnter(event: DragEvent<HTMLDivElement>) {
@@ -165,21 +191,35 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white p-8">
-      <h1 className="text-3xl font-bold mb-6">Your Uploaded Sites</h1>
-      <p className="text-gray-400 mb-8">
-        Upload a .zip folder of your static website (index.html required).
-      </p>
+    <div className="min-h-screen bg-gray-950 p-8 text-white">
+      <motion.h1
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4 }}
+        className="mb-4 text-3xl font-bold"
+      >
+        Your Uploaded Sites
+      </motion.h1>
+      <motion.p
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, delay: 0.1 }}
+        className="mb-8 text-gray-400"
+      >
+        Upload a <code>.zip</code> folder of your static website (index.html required).
+      </motion.p>
 
-      <div
+      <motion.div
         onClick={openFileDialog}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`group relative mb-10 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-10 text-center transition-all duration-200 ease-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+        animate={{ scale: dragActive ? 1.02 : 1 }}
+        transition={{ type: "spring", stiffness: 260, damping: 20 }}
+        className={`relative mb-10 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-10 text-center shadow-lg shadow-black/10 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
           dragActive
-            ? "border-blue-400 bg-blue-900/20 shadow-[0_0_0_3px_rgba(59,130,246,0.25)]"
+            ? "border-blue-400 bg-blue-900/20"
             : "border-gray-800 bg-gray-900 hover:border-gray-600 hover:bg-gray-900/70"
         } ${uploading ? "pointer-events-none opacity-80" : ""}`}
         role="button"
@@ -203,118 +243,175 @@ export default function Dashboard() {
               return;
             }
             setFile(selected);
-            handleUpload(selected);
           }}
         />
-        <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/20 text-blue-400">
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="h-6 w-6"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M3 15.75V19.5A1.5 1.5 0 0 0 4.5 21h15a1.5 1.5 0 0 0 1.5-1.5v-3.75M16.5 9 12 4.5 7.5 9m4.5-4.5V15"
-            />
-          </svg>
-        </div>
-        <p className="text-lg font-medium text-white">
-          {dragActive ? "Drop your .zip file" : "Drag & drop your .zip here"}
-        </p>
-        <p className="mt-2 max-w-sm text-sm text-gray-400">
-          or click below to browse files from your device
-        </p>
-        <button
-          type="button"
-          onClick={openFileDialog}
-          className="mt-6 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25 }}
+          className="flex flex-col items-center"
         >
-          {uploading ? (
-            <svg
-              className="h-4 w-4 animate-spin"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"
-              />
-            </svg>
-          ) : (
+          <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-500/20 text-blue-400">
             <svg
               xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
               strokeWidth="1.5"
-              className="h-4 w-4"
+              className="h-6 w-6"
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-          )}
-          <span>{uploading ? "Uploading" : "Upload .zip"}</span>
-        </button>
-
-        {file && !uploading && (
-          <p className="mt-4 text-sm text-gray-300">Selected: {file.name}</p>
-        )}
-
-        {uploadProgress !== null && (
-          <div className="mt-6 flex w-full max-w-md flex-col items-center">
-            <div className="h-2 w-full overflow-hidden rounded-full bg-gray-800">
-              <div
-                className="h-full rounded-full bg-blue-500 transition-all duration-200"
-                style={{ width: `${uploadProgress}%` }}
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M3 15.75V19.5A1.5 1.5 0 0 0 4.5 21h15a1.5 1.5 0 0 0 1.5-1.5v-3.75M16.5 9 12 4.5 7.5 9m4.5-4.5V15"
               />
-            </div>
-            <span className="mt-2 text-xs text-gray-400">{Math.round(uploadProgress)}%</span>
+            </svg>
+          </div>
+          <p className="text-lg font-medium text-white">
+            {dragActive ? "Drop your .zip file" : "Drag & drop your .zip here"}
+          </p>
+          <p className="mt-2 max-w-sm text-sm text-gray-400">
+            or click below to browse files from your device
+          </p>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              openFileDialog();
+            }}
+            className="mt-6 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+          >
+            {uploading ? "Uploading..." : "Choose File"}
+          </button>
+        </motion.div>
+
+        <AnimatePresence>
+          {file && !uploading && (
+            <motion.div
+              key="file-preview"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+              className="mt-6 flex flex-col items-center text-sm text-gray-300"
+            >
+              <span>
+                Selected: <strong>{file.name}</strong> ({(file.size / 1024).toFixed(1)} KB)
+              </span>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleUpload();
+                }}
+                className="mt-3 rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-300"
+              >
+                Upload .zip
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {uploadProgress !== null && (
+            <motion.div
+              key="progress"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.25 }}
+              className="mt-8 flex w-full max-w-md flex-col items-center"
+            >
+              <div className="h-2 w-full overflow-hidden rounded-full bg-gray-800">
+                <motion.div
+                  className="h-full rounded-full bg-blue-500"
+                  initial={{ width: "0%" }}
+                  animate={{ width: `${uploadProgress}%` }}
+                  transition={{ ease: "easeInOut", duration: 0.2 }}
+                />
+              </div>
+              <span className="mt-2 text-xs text-gray-400">{Math.round(uploadProgress)}%</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
+
+      <AnimatePresence>
+        {message && (
+          <motion.p
+            key={message}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.25 }}
+            className={`mb-8 text-sm ${
+              messageTone === "success"
+                ? "text-emerald-400"
+                : messageTone === "error"
+                ? "text-red-400"
+                : messageTone === "warning"
+                ? "text-amber-300"
+                : "text-gray-400"
+            }`}
+          >
+            {message}
+          </motion.p>
+        )}
+      </AnimatePresence>
+
+      <div className="mt-12">
+        {sites.length === 0 ? (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+            className="rounded-xl border border-gray-800 bg-gray-900 p-6 text-gray-400"
+          >
+            You have not uploaded any websites yet. Start by uploading a .zip via the form above.
+          </motion.div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {sites.map((site, index) => (
+              <motion.div
+                key={getSiteId(site)}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: index * 0.05 }}
+                className="rounded-xl border border-gray-800 bg-gray-900 p-4 transition hover:border-blue-400"
+              >
+                <h2 className="text-xl font-semibold">{site.name}</h2>
+                <p className="mt-1 text-sm text-gray-400">Status: {site.status}</p>
+                <p className="mt-1 text-sm text-gray-400">SEO Score: {site.meta?.seoScore ?? "N/A"}</p>
+                {site.deployUrl && (
+                  <a
+                    href={site.deployUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-3 inline-flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
+                  >
+                    View Site
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      className="h-4 w-4"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="m14.25 6.75 3 3m0 0-3 3m3-3h-7.5a4.5 4.5 0 0 0-4.5 4.5V18"
+                      />
+                    </svg>
+                  </a>
+                )}
+              </motion.div>
+            ))}
           </div>
         )}
       </div>
-
-      {message && (
-        <p
-          className={`mb-8 text-sm ${
-            messageTone === "success"
-              ? "text-emerald-400"
-              : messageTone === "error"
-              ? "text-red-400"
-              : messageTone === "warning"
-              ? "text-amber-300"
-              : "text-gray-400"
-          }`}
-        >
-          {message}
-        </p>
-      )}
-
-      {sites.length === 0 ? (
-        <div className="rounded-xl border border-gray-800 bg-gray-900 p-6 text-gray-400">
-          You have not uploaded any websites yet. Start by uploading a .zip via the form above.
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {sites.map((site) => (
-            <div key={getSiteId(site)} className="p-4 bg-gray-900 rounded-xl border border-gray-800">
-              <h2 className="text-xl font-semibold">{site.name}</h2>
-              <p>Status: {site.status}</p>
-              <p>SEO Score: {site.meta?.seoScore ?? "N/A"}</p>
-              {site.deployUrl && (
-                <a href={site.deployUrl} target="_blank" className="text-blue-400 underline">
-                  View Site
-                </a>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
