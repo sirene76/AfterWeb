@@ -78,6 +78,7 @@ export async function GET(request: NextRequest) {
           seoScore: site.meta?.seoScore ?? 0,
           title: site.meta?.title ?? "",
           description: site.meta?.description ?? "",
+          faviconUrl: site.meta?.faviconUrl ?? "",
         },
         maintenance: {
           uptime: maintenance.uptime ?? null,
