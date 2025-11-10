@@ -110,6 +110,8 @@ export default function Dashboard() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
   const messageTimeoutRef = useRef<number | null>(null);
+  const verificationTimeoutsRef = useRef<number[]>([]);
+  const refreshIntervalRef = useRef<number | null>(null);
 
 const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploadThing(
   "websiteZip",
@@ -284,7 +286,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
     }
   }
 
-  function showMessage(text: string, tone: MessageTone) {
+  function showMessage(text: string, tone: MessageTone, duration = 4000) {
     if (messageTimeoutRef.current) {
       window.clearTimeout(messageTimeoutRef.current);
       messageTimeoutRef.current = null;
@@ -295,7 +297,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
       messageTimeoutRef.current = window.setTimeout(() => {
         setMessage("");
         setMessageTone("");
-      }, 4000);
+      }, duration);
     }
   }
 
@@ -335,10 +337,85 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
   }
 
   useEffect(() => {
-    fetchSites();
+    let isMounted = true;
+
+    void fetchSites();
+
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get("checkout") === "success";
+    const websiteId = params.get("websiteId");
+
+    const scheduleRefresh = (delay: number) => {
+      const timeoutId = window.setTimeout(() => {
+        void fetchSites();
+      }, delay);
+      verificationTimeoutsRef.current.push(timeoutId);
+    };
+
+    if (success && websiteId) {
+      (async () => {
+        showMessage("🔄 Verifying payment...", "info", 8000);
+
+        try {
+          const response = await fetch("/api/billing/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ websiteId }),
+          });
+
+          const data = (await response.json()) as { ok?: boolean; plan?: string } & Record<string, unknown>;
+
+          if (!isMounted) {
+            return;
+          }
+
+          if (response.ok && data?.ok) {
+            const planName = typeof data.plan === "string" ? data.plan.toUpperCase() : "updated";
+            showMessage(`✅ Plan updated to ${planName}`, "success", 6000);
+            void fetchSites();
+            scheduleRefresh(3000);
+          } else {
+            showMessage("⚠️ Could not verify subscription yet.", "warning", 6000);
+            scheduleRefresh(3000);
+          }
+        } catch (error) {
+          console.error("Verification failed", error);
+          if (isMounted) {
+            showMessage("⚠️ Verification failed", "warning", 6000);
+            scheduleRefresh(3000);
+          }
+        } finally {
+          const updatedParams = new URLSearchParams(window.location.search);
+          updatedParams.delete("checkout");
+          updatedParams.delete("websiteId");
+          const nextQuery = updatedParams.toString();
+          const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`;
+          window.history.replaceState(null, "", nextUrl);
+
+          if (isMounted) {
+            scheduleRefresh(10000);
+          }
+        }
+      })();
+    }
+
+    refreshIntervalRef.current = window.setInterval(() => {
+      void fetchSites();
+    }, 15000);
+
     return () => {
+      isMounted = false;
+      verificationTimeoutsRef.current.forEach((timeoutId) => {
+        window.clearTimeout(timeoutId);
+      });
+      verificationTimeoutsRef.current = [];
+      if (refreshIntervalRef.current !== null) {
+        window.clearInterval(refreshIntervalRef.current);
+        refreshIntervalRef.current = null;
+      }
       if (messageTimeoutRef.current) {
         window.clearTimeout(messageTimeoutRef.current);
+        messageTimeoutRef.current = null;
       }
     };
   }, []);
