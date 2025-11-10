@@ -9,6 +9,9 @@ export interface WebsiteMeta {
   faviconUrl?: string;
 }
 
+export type WebsitePlan = "basic" | "standard" | "pro";
+export type WebsiteBillingStatus = "inactive" | "active" | "past_due" | "canceled";
+
 export interface WebsiteDocument extends Document {
   name: string;
   userEmail: string;
@@ -16,6 +19,10 @@ export interface WebsiteDocument extends Document {
   deployUrl?: string;
   archiveUrl?: string;
   zipUrl?: string;
+  plan: WebsitePlan;
+  billingStatus: WebsiteBillingStatus;
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
   meta: WebsiteMeta;
   createdAt: Date;
   updatedAt: Date;
@@ -33,6 +40,18 @@ const WebsiteSchema = new Schema<WebsiteDocument>(
     deployUrl: { type: String },
     archiveUrl: { type: String },
     zipUrl: { type: String },
+    plan: {
+      type: String,
+      enum: ["basic", "standard", "pro"],
+      default: "basic",
+    },
+    billingStatus: {
+      type: String,
+      enum: ["inactive", "active", "past_due", "canceled"],
+      default: "inactive",
+    },
+    stripeCustomerId: { type: String },
+    stripeSubscriptionId: { type: String },
     meta: {
       pages: { type: Number, default: 0 },
       scripts: { type: Number, default: 0 },
