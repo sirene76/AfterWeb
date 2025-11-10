@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 
 import { analyzeSite } from "@/lib/analyzeSite";
-import { connectToDatabase } from "@/lib/db";
+import connectDB from "@/lib/db";
 import { extractZip } from "@/lib/extractZip";
+import { deployToCloudflare } from "@/lib/deployToCloudflare";
 import Website from "@/models/Website";
 
 export async function POST(req: Request) {
@@ -41,15 +42,16 @@ export async function POST(req: Request) {
     }
 
     const extracted = extractZip(buffer);
-    const analysis = analyzeSite(extracted);
+    const analysis = await analyzeSite(extracted);
 
-    await connectToDatabase();
+    await connectDB();
 
     const site = await Website.create({
       name: analysis.title || uploadedFileName.replace(/\.zip$/i, "") || "Uploaded Site",
       userEmail,
       status: "analyzed",
       archiveUrl: fileUrl ?? undefined,
+      zipUrl: fileUrl ?? undefined,
       meta: {
         pages: analysis.pageCount,
         scripts: analysis.scriptCount,
@@ -59,6 +61,25 @@ export async function POST(req: Request) {
         faviconUrl: analysis.faviconDataUrl ?? "",
       },
     });
+
+    const projectName = process.env.CLOUDFLARE_PROJECT_NAME;
+    const token = process.env.CLOUDFLARE_API_TOKEN;
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+
+    if (projectName && token && accountId) {
+      try {
+        const deployUrl = await deployToCloudflare(fileUrl, projectName, token, accountId);
+        if (deployUrl) {
+          site.deployUrl = deployUrl;
+        }
+        site.status = "deployed";
+        await site.save();
+      } catch (deployError) {
+        console.error("Automatic deployment failed", deployError);
+        site.status = "failed";
+        await site.save();
+      }
+    }
 
     return NextResponse.json({
       siteId: site._id.toString(),

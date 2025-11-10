@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { connectToDatabase } from "@/lib/db";
+import connectDB from "@/lib/db";
 import MaintenanceLog, { type MaintenanceLogType } from "@/models/MaintenanceLog";
 import Website from "@/models/Website";
+import { Types } from "mongoose";
 
 interface MaintenanceSummary {
   status: string;
   ranAt: string;
-  result: unknown;
+  details: unknown;
 }
 
 type MaintenanceByType = Partial<Record<MaintenanceLogType, MaintenanceSummary>>;
@@ -19,13 +20,14 @@ async function getMaintenanceSummaries(websiteIds: string[]): Promise<Map<string
   }
 
   const types: MaintenanceLogType[] = ["uptime", "backup", "seo"];
+  const objectIds = websiteIds.map((id) => new Types.ObjectId(id));
   const pipelines = await Promise.all(
     types.map((type) =>
       MaintenanceLog.aggregate<{
         _id: string;
-        log: { websiteId: string; status: string; result: unknown; createdAt: Date };
+        log: { websiteId: string; status: string; details: unknown; createdAt: Date };
       }>([
-        { $match: { websiteId: { $in: websiteIds }, type } },
+        { $match: { websiteId: { $in: objectIds }, type } },
         { $sort: { createdAt: -1 } },
         { $group: { _id: "$websiteId", log: { $first: "$$ROOT" } } },
       ]),
@@ -37,23 +39,45 @@ async function getMaintenanceSummaries(websiteIds: string[]): Promise<Map<string
     entries.forEach((entry) => {
       const { log } = entry;
       const createdAt = log.createdAt instanceof Date ? log.createdAt.toISOString() : new Date(log.createdAt).toISOString();
+      const websiteId = entry._id?.toString?.() ?? String(entry._id);
 
-      const existing = summaries.get(entry._id) ?? {};
+      const existing = summaries.get(websiteId) ?? {};
       existing[type] = {
         status: log.status,
         ranAt: createdAt,
-        result: log.result,
+        details: log.details,
       };
-      summaries.set(entry._id, existing);
+      summaries.set(websiteId, existing);
     });
   });
 
   return summaries;
 }
 
+async function getLastCheckMap(websiteIds: string[]): Promise<Map<string, string>> {
+  const lastCheck = new Map<string, string>();
+  if (websiteIds.length === 0) {
+    return lastCheck;
+  }
+  const objectIds = websiteIds.map((id) => new Types.ObjectId(id));
+  const results = await MaintenanceLog.aggregate<{ _id: string; createdAt: Date }>([
+    { $match: { websiteId: { $in: objectIds } } },
+    { $sort: { createdAt: -1 } },
+    { $group: { _id: "$websiteId", createdAt: { $first: "$createdAt" } } },
+  ]);
+
+  results.forEach((entry) => {
+    const createdAt = entry.createdAt instanceof Date ? entry.createdAt : new Date(entry.createdAt);
+    const key = entry._id?.toString?.() ?? String(entry._id);
+    lastCheck.set(key, createdAt.toISOString());
+  });
+
+  return lastCheck;
+}
+
 export async function GET(request: NextRequest) {
   try {
-    await connectToDatabase();
+    await connectDB();
 
     const { searchParams } = request.nextUrl;
     const userEmail = searchParams.get("userEmail") ?? undefined;
@@ -62,6 +86,7 @@ export async function GET(request: NextRequest) {
     const websites = await Website.find(query).sort({ createdAt: -1 }).lean();
     const websiteIds = websites.map((site) => site._id.toString());
     const maintenanceSummaries = await getMaintenanceSummaries(websiteIds);
+    const lastCheckMap = await getLastCheckMap(websiteIds);
 
     const formatted = websites.map((site) => {
       const maintenance = maintenanceSummaries.get(site._id.toString()) ?? {};
@@ -85,6 +110,7 @@ export async function GET(request: NextRequest) {
           backup: maintenance.backup ?? null,
           seo: maintenance.seo ?? null,
         },
+        lastCheck: lastCheckMap.get(site._id.toString()) ?? null,
         createdAt:
           site.createdAt instanceof Date
             ? site.createdAt.toISOString()

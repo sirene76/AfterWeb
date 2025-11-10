@@ -46,7 +46,7 @@ const FALLBACK_FAVICON_NAMES = [
   "assets/favicon.svg",
 ];
 
-export function analyzeSite(files: ExtractedFiles): SiteAnalysis {
+function analyzeFromFiles(files: ExtractedFiles): SiteAnalysis {
   const htmlEntries = Object.entries(files).filter(([name]) =>
     name.toLowerCase().endsWith(".html") || name.toLowerCase().endsWith(".htm"),
   );
@@ -132,4 +132,25 @@ export function analyzeSite(files: ExtractedFiles): SiteAnalysis {
     faviconPath,
     faviconDataUrl,
   };
+}
+
+async function analyzeFromUrl(url: string): Promise<SiteAnalysis> {
+  if (!url) {
+    throw new Error("Missing URL for analysis");
+  }
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Failed to load site for analysis: ${res.status}`);
+  }
+  const html = await res.text();
+  return analyzeFromFiles({
+    "index.html": { data: html, encoding: "utf-8", mimeType: "text/html" },
+  });
+}
+
+export async function analyzeSite(input: ExtractedFiles | string): Promise<SiteAnalysis> {
+  if (typeof input === "string") {
+    return analyzeFromUrl(input);
+  }
+  return analyzeFromFiles(input);
 }

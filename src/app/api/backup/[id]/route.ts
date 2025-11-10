@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { backupToR2 } from "@/lib/backupToR2";
-import { connectToDatabase } from "@/lib/db";
+import connectDB from "@/lib/db";
 import MaintenanceLog from "@/models/MaintenanceLog";
 import Website from "@/models/Website";
 
@@ -10,7 +10,7 @@ export async function POST(
   { params }: { params: { id: string } },
 ) {
   try {
-    await connectToDatabase();
+    await connectDB();
 
     const website = await Website.findById(params.id);
     if (!website) {
@@ -20,26 +20,23 @@ export async function POST(
       return NextResponse.json({ error: "Website has not been deployed yet" }, { status: 400 });
     }
 
-    const result = await backupToR2({
-      websiteId: website._id.toString(),
-      deployUrl: website.deployUrl,
-    });
+    const backupUrl = await backupToR2(website.deployUrl, website._id.toString());
 
     await MaintenanceLog.create({
-      websiteId: website._id.toString(),
+      websiteId: website._id,
       type: "backup",
       status: "success",
-      result,
+      details: { backupUrl },
     });
 
-    return NextResponse.json({ success: true, backup: result });
+    return NextResponse.json({ success: true, backupUrl });
   } catch (error) {
     console.error("Backup route error", error);
     await MaintenanceLog.create({
       websiteId: params.id,
       type: "backup",
-      status: "failed",
-      result: {
+      status: "fail",
+      details: {
         message: error instanceof Error ? error.message : "Unknown error",
       },
     }).catch((logError) => {
