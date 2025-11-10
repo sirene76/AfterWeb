@@ -6,6 +6,7 @@ export interface WebsiteMeta {
   seoScore: number;
   title: string;
   description: string;
+  faviconUrl?: string;
 }
 
 export interface WebsiteDocument extends Document {
@@ -13,6 +14,7 @@ export interface WebsiteDocument extends Document {
   userEmail: string;
   status: "uploaded" | "analyzed" | "deployed" | "failed";
   deployUrl?: string;
+  archiveUrl?: string;
   meta: WebsiteMeta;
   createdAt: Date;
   updatedAt: Date;
@@ -28,12 +30,14 @@ const WebsiteSchema = new Schema<WebsiteDocument>(
       default: "uploaded",
     },
     deployUrl: { type: String },
+    archiveUrl: { type: String },
     meta: {
       pages: { type: Number, default: 0 },
       scripts: { type: Number, default: 0 },
       seoScore: { type: Number, default: 0 },
       title: { type: String, default: "" },
       description: { type: String, default: "" },
+      faviconUrl: { type: String, default: "" },
     },
   },
   {

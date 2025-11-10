@@ -1,6 +1,23 @@
 "use client";
-import { useEffect, useRef, useState, DragEvent } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+
+import { DragEvent, useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useUploadThing } from "@uploadthing/react";
+import Lottie from "lottie-react";
+
+import type { OurFileRouter } from "@/app/api/uploadthing/core";
+import successAnim from "@/public/lottie/success.json";
+
+type MessageTone = "success" | "error" | "warning" | "info" | "";
+
+type WebsiteMeta = {
+  pages?: number;
+  scripts?: number;
+  seoScore?: number;
+  title?: string;
+  description?: string;
+  faviconUrl?: string;
+};
 
 type Website = {
   _id?: string;
@@ -8,10 +25,19 @@ type Website = {
   name: string;
   status: string;
   deployUrl?: string;
-  meta?: { seoScore?: number };
+  meta?: WebsiteMeta;
 };
 
 type WebsitesResponse = { websites?: Website[] } | Website[];
+
+type UploadSummary = {
+  siteId: string;
+  meta: {
+    title: string;
+    description: string;
+    faviconUrl?: string;
+  };
+};
 
 function normalizeSites(data: WebsitesResponse): Website[] {
   if (Array.isArray(data)) {
@@ -35,11 +61,15 @@ export default function Dashboard() {
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [message, setMessage] = useState("");
-  const [messageTone, setMessageTone] = useState<"success" | "error" | "warning" | "info" | "">("");
+  const [messageTone, setMessageTone] = useState<MessageTone>("");
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [lastUploaded, setLastUploaded] = useState<UploadSummary | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
   const messageTimeoutRef = useRef<number | null>(null);
+
+  const { startUpload, isUploading: uploadThingUploading } = useUploadThing<OurFileRouter>("websiteZip");
+  const isBusy = uploading || uploadThingUploading;
 
   async function fetchSites() {
     try {
@@ -54,7 +84,7 @@ export default function Dashboard() {
     }
   }
 
-  function showMessage(text: string, tone: "success" | "error" | "warning" | "info" | "") {
+  function showMessage(text: string, tone: MessageTone) {
     if (messageTimeoutRef.current) {
       window.clearTimeout(messageTimeoutRef.current);
       messageTimeoutRef.current = null;
@@ -70,7 +100,7 @@ export default function Dashboard() {
   }
 
   async function handleUpload(selectedFile?: File) {
-    if (uploading) return;
+    if (isBusy) return;
 
     const uploadFile = selectedFile ?? file;
     if (!uploadFile) {
@@ -84,54 +114,65 @@ export default function Dashboard() {
 
     setFile(uploadFile);
     setUploading(true);
-    setUploadProgress(0);
+    setUploadProgress(5);
     showMessage("", "");
 
-    const form = new FormData();
-    form.append("file", uploadFile);
-    form.append("userEmail", "demo@afterweb.dev");
-
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload");
-
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-        setUploadProgress(percent);
-      }
-    };
-
-    xhr.onload = async () => {
-      setUploading(false);
-      let responseData: { message?: string; error?: string } = {};
-      try {
-        responseData = JSON.parse(xhr.responseText || "{}");
-      } catch (error) {
-        console.warn("Failed to parse upload response", error);
-      }
-
-      if (xhr.status >= 200 && xhr.status < 300) {
-        setUploadProgress(100);
-        showMessage(responseData.message || "✅ Upload successful!", "success");
-        await fetchSites();
-        window.setTimeout(() => setUploadProgress(null), 800);
-        setFile(null);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = "";
-        }
-      } else {
+    try {
+      const uploadResponse = await startUpload([uploadFile]);
+      if (!uploadResponse || uploadResponse.length === 0 || !uploadResponse[0]?.url) {
+        showMessage("❌ UploadThing failed", "error");
         setUploadProgress(null);
-        showMessage(`❌ ${responseData.error || "Upload failed."}`, "error");
+        return;
       }
-    };
 
-    xhr.onerror = () => {
-      setUploading(false);
+      const fileUrl = uploadResponse[0].url;
+      setUploadProgress(60);
+
+      const response = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileUrl, userEmail: "demo@afterweb.dev" }),
+      });
+
+      const result = (await response.json()) as {
+        siteId?: string;
+        message?: string;
+        error?: string;
+        meta?: { title?: string; description?: string; faviconUrl?: string };
+      };
+
+      if (!response.ok) {
+        showMessage(`❌ ${result?.error || "Upload failed."}`, "error");
+        setUploadProgress(null);
+        return;
+      }
+
+      setUploadProgress(100);
+      const successMessage = result.message ? `✅ ${result.message}` : "✅ Upload successful!";
+      showMessage(successMessage, "success");
+
+      setLastUploaded({
+        siteId: result.siteId ?? "",
+        meta: {
+          title: result.meta?.title?.trim() || uploadFile.name.replace(/\.zip$/i, ""),
+          description: result.meta?.description?.trim() || "Your static site is ready!",
+          faviconUrl: result.meta?.faviconUrl || "",
+        },
+      });
+
+      await fetchSites();
+      window.setTimeout(() => setUploadProgress(null), 800);
+      setFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (error) {
+      console.error("Upload failed", error);
+      showMessage("❌ Upload failed. Please try again.", "error");
       setUploadProgress(null);
-      showMessage("❌ Network error during upload.", "error");
-    };
-
-    xhr.send(form);
+    } finally {
+      setUploading(false);
+    }
   }
 
   useEffect(() => {
@@ -146,6 +187,7 @@ export default function Dashboard() {
   function handleDragEnter(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
+    if (isBusy) return;
     dragDepthRef.current += 1;
     if (!dragActive) {
       setDragActive(true);
@@ -155,6 +197,7 @@ export default function Dashboard() {
   function handleDragOver(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
+    if (isBusy) return;
     if (!dragActive) {
       setDragActive(true);
     }
@@ -174,6 +217,7 @@ export default function Dashboard() {
     event.stopPropagation();
     dragDepthRef.current = 0;
     setDragActive(false);
+    if (isBusy) return;
 
     const droppedFile = event.dataTransfer.files?.[0];
     if (!droppedFile) return;
@@ -185,10 +229,15 @@ export default function Dashboard() {
   }
 
   function openFileDialog() {
-    if (!uploading) {
+    if (!isBusy) {
       fileInputRef.current?.click();
     }
   }
+
+  const faviconSrc = lastUploaded?.meta.faviconUrl?.startsWith("data:")
+    ? lastUploaded.meta.faviconUrl
+    : lastUploaded?.meta.faviconUrl || "";
+  const fallbackFavicon = "/favicon.svg";
 
   return (
     <div className="min-h-screen bg-gray-950 p-8 text-white">
@@ -221,7 +270,7 @@ export default function Dashboard() {
           dragActive
             ? "border-blue-400 bg-blue-900/20"
             : "border-gray-800 bg-gray-900 hover:border-gray-600 hover:bg-gray-900/70"
-        } ${uploading ? "pointer-events-none opacity-80" : ""}`}
+        } ${isBusy ? "pointer-events-none opacity-80" : ""}`}
         role="button"
         tabIndex={0}
       >
@@ -280,14 +329,15 @@ export default function Dashboard() {
               event.stopPropagation();
               openFileDialog();
             }}
-            className="mt-6 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+            disabled={isBusy}
+            className="mt-6 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:cursor-not-allowed disabled:bg-blue-500/60"
           >
-            {uploading ? "Uploading..." : "Choose File"}
+            {isBusy ? "Uploading..." : "Choose File"}
           </button>
         </motion.div>
 
         <AnimatePresence>
-          {file && !uploading && (
+          {file && !isBusy && (
             <motion.div
               key="file-preview"
               initial={{ opacity: 0, y: 10 }}
@@ -345,7 +395,7 @@ export default function Dashboard() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.25 }}
-            className={`mb-8 text-sm ${
+            className={`mb-4 text-sm ${
               messageTone === "success"
                 ? "text-emerald-400"
                 : messageTone === "error"
@@ -357,6 +407,51 @@ export default function Dashboard() {
           >
             {message}
           </motion.p>
+        )}
+      </AnimatePresence>
+
+      {message.includes("✅") && (
+        <Lottie animationData={successAnim} loop={false} className="mx-auto mt-6 h-32 w-32" />
+      )}
+
+      <AnimatePresence>
+        {lastUploaded && (
+          <motion.div
+            key={lastUploaded.siteId || lastUploaded.meta.title}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="mt-8 w-full max-w-xl rounded-xl border border-gray-800 bg-gray-900/80 p-4 text-left"
+          >
+            <div className="flex items-center gap-3">
+              <img
+                src={faviconSrc || fallbackFavicon}
+                alt="favicon"
+                className="h-10 w-10 rounded bg-gray-800 p-1"
+              />
+              <div>
+                <h3 className="text-xl font-semibold mb-1">{lastUploaded.meta.title}</h3>
+                <p className="text-sm text-gray-400">{lastUploaded.meta.description}</p>
+              </div>
+            </div>
+            <span className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-green-400">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                className="h-4 w-4"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4.5 12.75l6 6 9-13.5"
+                />
+              </svg>
+              Analyzed &amp; Stored
+            </span>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -380,8 +475,17 @@ export default function Dashboard() {
                 transition={{ duration: 0.3, delay: index * 0.05 }}
                 className="rounded-xl border border-gray-800 bg-gray-900 p-4 transition hover:border-blue-400"
               >
-                <h2 className="text-xl font-semibold">{site.name}</h2>
-                <p className="mt-1 text-sm text-gray-400">Status: {site.status}</p>
+                <div className="mb-3 flex items-center gap-3">
+                  <img
+                    src={(site.meta?.faviconUrl && site.meta.faviconUrl.startsWith("data:")) ? site.meta.faviconUrl : site.meta?.faviconUrl || fallbackFavicon}
+                    alt="site favicon"
+                    className="h-8 w-8 rounded bg-gray-800 p-1"
+                  />
+                  <div>
+                    <h2 className="text-xl font-semibold">{site.name}</h2>
+                    <p className="mt-1 text-sm text-gray-400">Status: {site.status}</p>
+                  </div>
+                </div>
                 <p className="mt-1 text-sm text-gray-400">SEO Score: {site.meta?.seoScore ?? "N/A"}</p>
                 {site.deployUrl && (
                   <a
