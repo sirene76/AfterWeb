@@ -27,6 +27,9 @@ type MaintenanceEntry = {
   details?: unknown;
 } | null;
 
+type WebsitePlan = "basic" | "standard" | "pro";
+type WebsiteBillingStatus = "inactive" | "active" | "past_due" | "canceled";
+
 type Website = {
   _id?: string;
   id?: string;
@@ -40,6 +43,8 @@ type Website = {
     seo: MaintenanceEntry;
   };
   lastCheck?: string | null;
+  plan?: WebsitePlan;
+  billingStatus?: WebsiteBillingStatus;
 };
 
 type WebsitesResponse = { websites?: Website[] } | Website[];
@@ -52,6 +57,29 @@ type UploadSummary = {
     faviconUrl?: string;
   };
 };
+
+const PLAN_LABELS: Record<WebsitePlan, string> = {
+  basic: "Basic",
+  standard: "Standard",
+  pro: "Pro",
+};
+
+const BILLING_STATUS_LABELS: Record<WebsiteBillingStatus, string> = {
+  inactive: "Inactive",
+  active: "Active",
+  past_due: "Past due",
+  canceled: "Canceled",
+};
+
+function formatPlan(plan?: WebsitePlan) {
+  const safePlan: WebsitePlan = plan ?? "basic";
+  return PLAN_LABELS[safePlan];
+}
+
+function formatBillingStatus(status?: WebsiteBillingStatus) {
+  const safeStatus: WebsiteBillingStatus = status ?? "inactive";
+  return BILLING_STATUS_LABELS[safeStatus];
+}
 
 function normalizeSites(data: WebsitesResponse): Website[] {
   if (Array.isArray(data)) {
@@ -78,6 +106,7 @@ export default function Dashboard() {
   const [messageTone, setMessageTone] = useState<MessageTone>("");
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [lastUploaded, setLastUploaded] = useState<UploadSummary | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
   const messageTimeoutRef = useRef<number | null>(null);
@@ -229,6 +258,29 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
       console.error("Backup failed", error);
       const message = error instanceof Error ? error.message : "Backup failed";
       showMessage(`❌ ${message}`, "error");
+    }
+  }
+
+  async function startCheckoutFlow(websiteId: string, targetPlan: WebsitePlan) {
+    const checkoutKey = `${websiteId}:${targetPlan}`;
+    try {
+      setCheckoutLoading(checkoutKey);
+      const res = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ websiteId, plan: targetPlan }),
+      });
+      const data = (await res.json()) as { url?: string; error?: string };
+      if (!res.ok || !data.url) {
+        throw new Error(data.error || "Unable to start checkout");
+      }
+      window.location.href = data.url;
+    } catch (error) {
+      console.error("Checkout session error", error);
+      const messageText = error instanceof Error ? error.message : "Unable to start checkout";
+      showMessage(`❌ ${messageText}`, "error");
+    } finally {
+      setCheckoutLoading(null);
     }
   }
 
@@ -575,95 +627,179 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
           </motion.div>
         ) : (
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {sites.map((site, index) => (
-              <motion.div
-                key={getSiteId(site)}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.3, delay: index * 0.05 }}
-                className="rounded-xl border border-gray-800 bg-gray-900 p-4 transition hover:border-blue-400"
-              >
-                <div className="mb-3 flex items-center gap-3">
-                  <img
-                    src={(site.meta?.faviconUrl && site.meta.faviconUrl.startsWith("data:")) ? site.meta.faviconUrl : site.meta?.faviconUrl || fallbackFavicon}
-                    alt="site favicon"
-                    className="h-8 w-8 rounded bg-gray-800 p-1"
-                  />
-                  <div>
-                    <h2 className="text-xl font-semibold">{site.name}</h2>
-                    <p className="mt-1 text-sm text-gray-400">Status: {site.status}</p>
+            {sites.map((site, index) => {
+              const siteId = getSiteId(site);
+              const plan = (site.plan ?? "basic") as WebsitePlan;
+              const billingStatus = (site.billingStatus ?? "inactive") as WebsiteBillingStatus;
+              const planLabel = formatPlan(plan);
+              const billingStatusLabel = formatBillingStatus(billingStatus);
+              const isBillingActive = billingStatus === "active";
+              const canAccessPremium = isBillingActive && (plan === "standard" || plan === "pro");
+              const canAccessAutoReports = isBillingActive && plan === "pro";
+              const upgradeTargets: WebsitePlan[] =
+                plan === "basic" ? ["standard", "pro"] : plan === "standard" ? ["pro"] : [];
+
+              return (
+                <motion.div
+                  key={siteId}
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, delay: index * 0.05 }}
+                  className="rounded-xl border border-gray-800 bg-gray-900 p-4 transition hover:border-blue-400"
+                >
+                  <div className="mb-3 flex items-center gap-3">
+                    <img
+                      src={
+                        site.meta?.faviconUrl && site.meta.faviconUrl.startsWith("data:")
+                          ? site.meta.faviconUrl
+                          : site.meta?.faviconUrl || fallbackFavicon
+                      }
+                      alt="site favicon"
+                      className="h-8 w-8 rounded bg-gray-800 p-1"
+                    />
+                    <div>
+                      <h2 className="text-xl font-semibold">{site.name}</h2>
+                      <p className="mt-1 text-sm text-gray-400">Status: {site.status}</p>
+                      <p className="text-sm text-gray-400">
+                        Plan: <span className="font-semibold">{planLabel}</span> · Status: {billingStatusLabel}
+                      </p>
+                      {!isBillingActive && (
+                        <p className="mt-1 text-xs text-amber-300">
+                          Subscription {billingStatusLabel.toLowerCase()}. Upgrade to unlock premium automations.
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-                <p className="mt-1 text-sm text-gray-400">SEO Score: {site.meta?.seoScore ?? "N/A"}</p>
-                {site.deployUrl && (
-                  <a
-                    href={site.deployUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-3 inline-flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
-                  >
-                    View Site
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      className="h-4 w-4"
+                  {upgradeTargets.length > 0 && (
+                    <div className="mb-3 flex flex-wrap gap-2">
+                      {upgradeTargets.map((targetPlan) => {
+                        const checkoutKey = `${siteId}:${targetPlan}`;
+                        const isLoading = checkoutLoading === checkoutKey;
+                        return (
+                          <button
+                            key={targetPlan}
+                            onClick={() => void startCheckoutFlow(siteId, targetPlan)}
+                            disabled={isLoading}
+                            className="mt-1 rounded-lg bg-amber-500 px-3 py-1 text-sm font-medium text-gray-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-amber-700/60 disabled:text-gray-400"
+                          >
+                            {isLoading ? "Redirecting..." : `Upgrade to ${PLAN_LABELS[targetPlan]}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <p className="mt-1 text-sm text-gray-400">SEO Score: {site.meta?.seoScore ?? "N/A"}</p>
+                  {site.deployUrl && (
+                    <a
+                      href={site.deployUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 inline-flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
                     >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="m14.25 6.75 3 3m0 0-3 3m3-3h-7.5a4.5 4.5 0 0 0-4.5 4.5V18"
-                      />
-                    </svg>
-                  </a>
-                )}
-                <div className="mt-3 space-y-1">
-                  {renderMaintenanceStatus("Uptime", site.maintenance?.uptime)}
-                  {renderMaintenanceStatus("Backup", site.maintenance?.backup)}
-                  {renderMaintenanceStatus("SEO", site.maintenance?.seo)}
-                </div>
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-xs text-gray-400">
-                    Last check: {formatLastCheck(site.lastCheck)}
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={async () => {
-                        const res = await fetch(`/api/seo/analyze/${getSiteId(site)}`, { method: "POST" });
-                        const data = (await res.json()) as {
-                          analysis?: { score: number };
-                          ai?: string;
-                          error?: string;
-                        };
-                        if (!res.ok || data.error) {
-                          alert(`SEO audit failed: ${data.error ?? res.statusText}`);
-                          return;
-                        }
-                        alert(`SEO Score: ${data.analysis?.score ?? "N/A"}\n\nAI Suggestions:\n${data.ai ?? "No suggestions"}`);
-                        void fetchSites();
-                      }}
-                      className="px-3 py-1 bg-purple-600 rounded-lg text-sm hover:bg-purple-700"
-                    >
-                      Run SEO Audit
-                    </button>
-                    <button
-                      onClick={() => void handleRedeploy(getSiteId(site))}
-                      className="px-3 py-1 bg-blue-600 rounded-lg text-sm hover:bg-blue-700"
-                    >
-                      Redeploy
-                    </button>
-                    <button
-                      onClick={() => void handleBackup(getSiteId(site))}
-                      className="px-3 py-1 bg-gray-700 rounded-lg text-sm hover:bg-gray-800 ml-2"
-                    >
-                      Backup Now
-                    </button>
+                      View Site
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        className="h-4 w-4"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="m14.25 6.75 3 3m0 0-3 3m3-3h-7.5a4.5 4.5 0 0 0-4.5 4.5V18"
+                        />
+                      </svg>
+                    </a>
+                  )}
+                  <div className="mt-3 space-y-1">
+                    {renderMaintenanceStatus("Uptime", site.maintenance?.uptime)}
+                    {renderMaintenanceStatus("Backup", site.maintenance?.backup)}
+                    {renderMaintenanceStatus("SEO", site.maintenance?.seo)}
                   </div>
-                </div>
-              </motion.div>
-            ))}
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-gray-400">
+                      Last check: {formatLastCheck(site.lastCheck)}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={async () => {
+                          if (!canAccessPremium) {
+                            showMessage("⚠️ Upgrade to Standard to unlock SEO audits.", "warning");
+                            return;
+                          }
+                          const res = await fetch(`/api/seo/analyze/${siteId}`, { method: "POST" });
+                          const data = (await res.json()) as {
+                            analysis?: { score: number };
+                            ai?: string;
+                            error?: string;
+                          };
+                          if (!res.ok || data.error) {
+                            alert(`SEO audit failed: ${data.error ?? res.statusText}`);
+                            return;
+                          }
+                          alert(
+                            `SEO Score: ${data.analysis?.score ?? "N/A"}` +
+                              "\n\nAI Suggestions:\n" +
+                              (data.ai ?? "No suggestions"),
+                          );
+                          void fetchSites();
+                        }}
+                        disabled={!canAccessPremium}
+                        className={`rounded-lg px-3 py-1 text-sm transition ${
+                          canAccessPremium
+                            ? "bg-purple-600 hover:bg-purple-700"
+                            : "cursor-not-allowed bg-gray-700 text-gray-400"
+                        }`}
+                      >
+                        Run SEO Audit
+                      </button>
+                      <button
+                        onClick={() => void handleRedeploy(siteId)}
+                        className="rounded-lg bg-blue-600 px-3 py-1 text-sm transition hover:bg-blue-700"
+                      >
+                        Redeploy
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!canAccessPremium) {
+                            showMessage("⚠️ Upgrade to Standard to unlock backups.", "warning");
+                            return;
+                          }
+                          void handleBackup(siteId);
+                        }}
+                        disabled={!canAccessPremium}
+                        className={`ml-2 rounded-lg px-3 py-1 text-sm transition ${
+                          canAccessPremium
+                            ? "bg-blue-600 hover:bg-blue-700"
+                            : "cursor-not-allowed bg-gray-700 text-gray-400"
+                        }`}
+                      >
+                        Backup Now
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!canAccessAutoReports) {
+                            showMessage("⚠️ Upgrade to Pro for automated reports.", "warning");
+                            return;
+                          }
+                          showMessage("✅ Weekly reports are automatically emailed to Pro clients.", "success");
+                        }}
+                        disabled={!canAccessAutoReports}
+                        className={`rounded-lg px-3 py-1 text-sm transition ${
+                          canAccessAutoReports
+                            ? "bg-green-600 hover:bg-green-700"
+                            : "cursor-not-allowed bg-gray-700 text-gray-400"
+                        }`}
+                      >
+                        Enable Auto Reports
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
           </div>
         )}
       </div>
