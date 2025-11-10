@@ -82,10 +82,10 @@ export default function Dashboard() {
   const dragDepthRef = useRef(0);
   const messageTimeoutRef = useRef<number | null>(null);
 
-  const { startUpload, isUploading: uploadThingUploading, permittedFileInfo } = useUploadThing(
-    "websiteZip",
-    {
-      onClientUploadComplete: async (res) => {
+const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploadThing(
+  "websiteZip",
+  {
+    onClientUploadComplete: async (res) => {
         if (!res || res.length === 0 || !res[0]?.url) {
           showMessage("❌ Upload failed", "error");
           setUploadProgress(null);
@@ -157,7 +157,7 @@ export default function Dashboard() {
     },
   );
   const isBusy = uploading || uploadThingUploading;
-  const maxUploadSize = permittedFileInfo?.config?.zip?.maxFileSize ?? "25MB";
+const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
 
   async function fetchSites() {
     try {

@@ -6,18 +6,24 @@ import MaintenanceLog from "@/models/MaintenanceLog";
 import Website from "@/models/Website";
 
 export async function POST(
-  _request: Request,
-  { params }: { params: { id: string } },
+  request: Request,
+  context: { params: Promise<{ id: string }> }
 ) {
+  const { id } = await context.params; // ✅ await params before use
+
   try {
     await connectDB();
 
-    const website = await Website.findById(params.id);
+    const website = await Website.findById(id);
     if (!website) {
       return NextResponse.json({ error: "Website not found" }, { status: 404 });
     }
+
     if (!website.deployUrl) {
-      return NextResponse.json({ error: "Website has not been deployed yet" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Website has not been deployed yet" },
+        { status: 400 }
+      );
     }
 
     const backupUrl = await backupToR2(website.deployUrl, website._id.toString());
@@ -32,8 +38,9 @@ export async function POST(
     return NextResponse.json({ success: true, backupUrl });
   } catch (error) {
     console.error("Backup route error", error);
+
     await MaintenanceLog.create({
-      websiteId: params.id,
+      websiteId: id,
       type: "backup",
       status: "fail",
       details: {
@@ -43,6 +50,9 @@ export async function POST(
       console.error("Failed to write backup failure log", logError);
     });
 
-    return NextResponse.json({ error: "Failed to back up site" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to back up site" },
+      { status: 500 }
+    );
   }
 }

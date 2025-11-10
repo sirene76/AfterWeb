@@ -4,9 +4,11 @@ import connectDB from "@/lib/db";
 import { deployToCloudflare } from "@/lib/deployToCloudflare";
 import Website from "@/models/Website";
 
-export async function POST(_req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;  // ✅ await params before using
   await connectDB();
-  const site = await Website.findById(params.id);
+
+  const site = await Website.findById(id);
   if (!site) {
     return NextResponse.json({ error: "Website not found" }, { status: 404 });
   }
