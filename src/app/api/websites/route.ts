@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
     const userEmail = searchParams.get("userEmail") ?? undefined;
 
     const query = userEmail ? { userEmail } : {};
-    const websites = await Website.find(query).sort({ createdAt: -1 }).lean();
+const websites: any[] = await Website.find(query).sort({ createdAt: -1 }).lean();
     const websiteIds = websites.map((site) => site._id.toString());
     const maintenanceSummaries = await getMaintenanceSummaries(websiteIds);
     const lastCheckMap = await getLastCheckMap(websiteIds);
@@ -97,6 +97,8 @@ export async function GET(request: NextRequest) {
         status: site.status,
         deployUrl: site.deployUrl ?? "",
         userEmail: site.userEmail,
+                plan: site.plan ?? null,
+        billingStatus: site.billingStatus ?? null,
         meta: {
           pages: site.meta?.pages ?? 0,
           scripts: site.meta?.scripts ?? 0,
