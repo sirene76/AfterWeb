@@ -1,29 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { connectToDatabase } from "@/lib/db";
+import connectDB from "@/lib/db";
 import MaintenanceLog from "@/models/MaintenanceLog";
+import { Types } from "mongoose";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: { websiteId: string } },
 ) {
   try {
-    await connectToDatabase();
+    await connectDB();
 
     const limitParam = request.nextUrl.searchParams.get("limit");
     const limit = Math.min(100, Math.max(1, Number(limitParam ?? "20")));
 
-    const logs = await MaintenanceLog.find({ websiteId: params.websiteId })
+    let websiteId: Types.ObjectId;
+    try {
+      websiteId = new Types.ObjectId(params.websiteId);
+    } catch {
+      return NextResponse.json({ error: "Invalid website id" }, { status: 400 });
+    }
+    const logs = await MaintenanceLog.find({ websiteId })
       .sort({ createdAt: -1 })
       .limit(limit)
       .lean();
 
     const serialized = logs.map((log) => ({
       id: log._id.toString(),
-      websiteId: log.websiteId,
+      websiteId: log.websiteId instanceof Types.ObjectId ? log.websiteId.toString() : String(log.websiteId),
       type: log.type,
       status: log.status,
-      result: log.result,
+      details: log.details,
       createdAt:
         log.createdAt instanceof Date
           ? log.createdAt.toISOString()

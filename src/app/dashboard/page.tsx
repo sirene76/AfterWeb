@@ -21,6 +21,12 @@ type WebsiteMeta = {
   faviconUrl?: string;
 };
 
+type MaintenanceEntry = {
+  status: "success" | "fail";
+  ranAt: string;
+  details?: unknown;
+} | null;
+
 type Website = {
   _id?: string;
   id?: string;
@@ -28,6 +34,12 @@ type Website = {
   status: string;
   deployUrl?: string;
   meta?: WebsiteMeta;
+  maintenance?: {
+    uptime: MaintenanceEntry;
+    backup: MaintenanceEntry;
+    seo: MaintenanceEntry;
+  };
+  lastCheck?: string | null;
 };
 
 type WebsitesResponse = { websites?: Website[] } | Website[];
@@ -157,6 +169,66 @@ export default function Dashboard() {
       setSites(normalizeSites(data));
     } catch (error) {
       console.error("Failed to load sites", error);
+    }
+  }
+
+  function renderMaintenanceStatus(label: string, entry?: MaintenanceEntry) {
+    let className = "text-gray-500";
+    let statusText = "No checks yet";
+
+    if (entry) {
+      className = entry.status === "success" ? "text-emerald-400" : "text-red-400";
+      const parsed = new Date(entry.ranAt);
+      const formatted = Number.isNaN(parsed.getTime()) ? entry.ranAt : parsed.toLocaleString();
+      statusText = `${entry.status === "success" ? "Success" : "Fail"} · ${formatted}`;
+    }
+
+    return (
+      <p className={`text-xs ${className}`}>
+        {label}: {statusText}
+      </p>
+    );
+  }
+
+  function formatLastCheck(lastCheck?: string | null) {
+    if (!lastCheck) {
+      return new Date().toLocaleString();
+    }
+    const parsed = new Date(lastCheck);
+    return Number.isNaN(parsed.getTime()) ? lastCheck : parsed.toLocaleString();
+  }
+
+  async function handleRedeploy(siteId: string) {
+    try {
+      showMessage("🚀 Redeploying site...", "info");
+      const res = await fetch(`/api/deploy/${siteId}`, { method: "POST" });
+      const data = (await res.json()) as { deployUrl?: string; error?: string };
+      if (!res.ok) {
+        throw new Error(data.error || "Redeploy failed");
+      }
+      showMessage("✅ Redeploy triggered!", "success");
+      await fetchSites();
+    } catch (error) {
+      console.error("Redeploy failed", error);
+      const message = error instanceof Error ? error.message : "Redeploy failed";
+      showMessage(`❌ ${message}`, "error");
+    }
+  }
+
+  async function handleBackup(siteId: string) {
+    try {
+      showMessage("💾 Starting backup...", "info");
+      const res = await fetch(`/api/backup/${siteId}`, { method: "POST" });
+      const data = (await res.json()) as { backupUrl?: string; error?: string };
+      if (!res.ok) {
+        throw new Error(data.error || "Backup failed");
+      }
+      showMessage("✅ Backup completed!", "success");
+      await fetchSites();
+    } catch (error) {
+      console.error("Backup failed", error);
+      const message = error instanceof Error ? error.message : "Backup failed";
+      showMessage(`❌ ${message}`, "error");
     }
   }
 
@@ -547,6 +619,30 @@ export default function Dashboard() {
                     </svg>
                   </a>
                 )}
+                <div className="mt-3 space-y-1">
+                  {renderMaintenanceStatus("Uptime", site.maintenance?.uptime)}
+                  {renderMaintenanceStatus("Backup", site.maintenance?.backup)}
+                  {renderMaintenanceStatus("SEO", site.maintenance?.seo)}
+                </div>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-gray-400">
+                    Last check: {formatLastCheck(site.lastCheck)}
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => void handleRedeploy(getSiteId(site))}
+                      className="px-3 py-1 bg-blue-600 rounded-lg text-sm hover:bg-blue-700"
+                    >
+                      Redeploy
+                    </button>
+                    <button
+                      onClick={() => void handleBackup(getSiteId(site))}
+                      className="px-3 py-1 bg-gray-700 rounded-lg text-sm hover:bg-gray-800 ml-2"
+                    >
+                      Backup Now
+                    </button>
+                  </div>
+                </div>
               </motion.div>
             ))}
           </div>

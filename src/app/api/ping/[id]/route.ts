@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { connectToDatabase } from "@/lib/db";
+import connectDB from "@/lib/db";
 import MaintenanceLog from "@/models/MaintenanceLog";
 import Website from "@/models/Website";
 
@@ -11,7 +11,7 @@ export async function POST(
   const { id } = params;
 
   try {
-    await connectToDatabase();
+    await connectDB();
     const website = await Website.findById(id);
 
     if (!website) {
@@ -28,12 +28,12 @@ export async function POST(
     });
     const durationMs = Date.now() - startedAt;
 
-    const status = response.ok ? "success" : "failed";
+    const status = response.ok ? "success" : "fail";
     const log = await MaintenanceLog.create({
-      websiteId: website._id.toString(),
+      websiteId: website._id,
       type: "uptime",
       status,
-      result: {
+      details: {
         statusCode: response.status,
         ok: response.ok,
         durationMs,
@@ -51,8 +51,8 @@ export async function POST(
     await MaintenanceLog.create({
       websiteId: id,
       type: "uptime",
-      status: "failed",
-      result: {
+      status: "fail",
+      details: {
         message: error instanceof Error ? error.message : "Unknown error",
       },
     }).catch((logError) => {

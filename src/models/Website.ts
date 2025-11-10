@@ -15,6 +15,7 @@ export interface WebsiteDocument extends Document {
   status: "uploaded" | "analyzed" | "deployed" | "failed";
   deployUrl?: string;
   archiveUrl?: string;
+  zipUrl?: string;
   meta: WebsiteMeta;
   createdAt: Date;
   updatedAt: Date;
@@ -31,6 +32,7 @@ const WebsiteSchema = new Schema<WebsiteDocument>(
     },
     deployUrl: { type: String },
     archiveUrl: { type: String },
+    zipUrl: { type: String },
     meta: {
       pages: { type: Number, default: 0 },
       scripts: { type: Number, default: 0 },
