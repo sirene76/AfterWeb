@@ -2,10 +2,12 @@
 
 import { DragEvent, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useUploadThing } from "uploadthing/react";
+import { generateReactHelpers } from "@uploadthing/react";
 import Lottie from "lottie-react";
 
 import type { OurFileRouter } from "@/app/api/uploadthing/core";
+
+const { useUploadThing } = generateReactHelpers<OurFileRouter>();
 import successAnim from "../../../public/lottie/success.json";
 
 type MessageTone = "success" | "error" | "warning" | "info" | "";
@@ -68,8 +70,82 @@ export default function Dashboard() {
   const dragDepthRef = useRef(0);
   const messageTimeoutRef = useRef<number | null>(null);
 
-  const { startUpload, isUploading: uploadThingUploading } = useUploadThing<OurFileRouter>("websiteZip");
+  const { startUpload, isUploading: uploadThingUploading, permittedFileInfo } = useUploadThing(
+    "websiteZip",
+    {
+      onClientUploadComplete: async (res) => {
+        if (!res || res.length === 0 || !res[0]?.url) {
+          showMessage("❌ Upload failed", "error");
+          setUploadProgress(null);
+          setUploading(false);
+          return;
+        }
+
+        const fileUrl = res[0].url;
+        setUploadProgress(60);
+        showMessage("✅ Upload successful! Analyzing...", "info");
+
+        try {
+          const response = await fetch("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileUrl,
+              userEmail: "demo@afterweb.dev",
+            }),
+          });
+
+          const data = (await response.json()) as {
+            siteId?: string;
+            error?: string;
+            meta?: { title?: string; description?: string; faviconUrl?: string };
+            message?: string;
+          };
+
+          if (!response.ok) {
+            showMessage(`❌ Analysis failed: ${data.error || "Unknown error"}`, "error");
+            setUploadProgress(null);
+            setUploading(false);
+            return;
+          }
+
+          setUploadProgress(100);
+          showMessage("✅ Analyzed and stored!", "success");
+
+          const currentFile = file;
+          setLastUploaded({
+            siteId: data.siteId ?? "",
+            meta: {
+              title: data.meta?.title?.trim() || currentFile?.name.replace(/\.zip$/i, "") || "Uploaded Site",
+              description: data.meta?.description?.trim() || "Your static site is ready!",
+              faviconUrl: data.meta?.faviconUrl || "",
+            },
+          });
+
+          await fetchSites();
+          window.setTimeout(() => setUploadProgress(null), 800);
+          setFile(null);
+          if (fileInputRef.current) {
+            fileInputRef.current.value = "";
+          }
+        } catch (error) {
+          console.error(error);
+          showMessage("❌ Analysis failed: Unknown error", "error");
+          setUploadProgress(null);
+        } finally {
+          setUploading(false);
+        }
+      },
+      onUploadError: (error) => {
+        console.error(error);
+        showMessage("❌ UploadThing error", "error");
+        setUploadProgress(null);
+        setUploading(false);
+      },
+    },
+  );
   const isBusy = uploading || uploadThingUploading;
+  const maxUploadSize = permittedFileInfo?.config?.zip?.maxFileSize ?? "25MB";
 
   async function fetchSites() {
     try {
@@ -118,59 +194,18 @@ export default function Dashboard() {
     showMessage("", "");
 
     try {
-      const uploadResponse = await startUpload([uploadFile]);
-      if (!uploadResponse || uploadResponse.length === 0 || !uploadResponse[0]?.url) {
-        showMessage("❌ UploadThing failed", "error");
+      const uploadPromise = startUpload([uploadFile]);
+      if (!uploadPromise) {
+        showMessage("❌ Upload failed to start", "error");
         setUploadProgress(null);
+        setUploading(false);
         return;
       }
-
-      const fileUrl = uploadResponse[0].url;
-      setUploadProgress(60);
-
-      const response = await fetch("/api/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileUrl, userEmail: "demo@afterweb.dev" }),
-      });
-
-      const result = (await response.json()) as {
-        siteId?: string;
-        message?: string;
-        error?: string;
-        meta?: { title?: string; description?: string; faviconUrl?: string };
-      };
-
-      if (!response.ok) {
-        showMessage(`❌ ${result?.error || "Upload failed."}`, "error");
-        setUploadProgress(null);
-        return;
-      }
-
-      setUploadProgress(100);
-      const successMessage = result.message ? `✅ ${result.message}` : "✅ Upload successful!";
-      showMessage(successMessage, "success");
-
-      setLastUploaded({
-        siteId: result.siteId ?? "",
-        meta: {
-          title: result.meta?.title?.trim() || uploadFile.name.replace(/\.zip$/i, ""),
-          description: result.meta?.description?.trim() || "Your static site is ready!",
-          faviconUrl: result.meta?.faviconUrl || "",
-        },
-      });
-
-      await fetchSites();
-      window.setTimeout(() => setUploadProgress(null), 800);
-      setFile(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+      await uploadPromise;
     } catch (error) {
       console.error("Upload failed", error);
       showMessage("❌ Upload failed. Please try again.", "error");
       setUploadProgress(null);
-    } finally {
       setUploading(false);
     }
   }
@@ -323,6 +358,7 @@ export default function Dashboard() {
           <p className="mt-2 max-w-sm text-sm text-gray-400">
             or click below to browse files from your device
           </p>
+          <p className="mt-1 text-xs text-gray-500">Max file size: {maxUploadSize}</p>
           <button
             type="button"
             onClick={(event) => {
