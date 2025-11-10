@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { AppSessionProvider } from "@/components/providers/session-provider";
+import { ReactNode } from "react";
+
+import { AppSessionProvider } from "@/components/AppSessionProvider";
 import { NavBar } from "@/components/nav-bar";
-import "../styles/globals.css";
+import "@/styles/globals.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,11 +21,11 @@ export const metadata: Metadata = {
   description: "Upload, analyze, and deploy your legacy websites with AfterWeb.",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+interface RootLayoutProps {
+  children: ReactNode;
+}
+
+export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en">
       <body
