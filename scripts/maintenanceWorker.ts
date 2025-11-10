@@ -2,8 +2,9 @@ import "dotenv/config";
 import connectDB from "@/lib/db";
 import Website from "@/models/Website";
 import MaintenanceLog from "@/models/MaintenanceLog";
-import { analyzeSite } from "@/lib/analyzeSite";
 import { backupToR2 } from "@/lib/backupToR2";
+import { generateSeoRecommendations } from "@/lib/aiSeoHelper";
+import { runSeoAgent } from "@/lib/seoAgent";
 
 async function run() {
   await connectDB();
@@ -26,7 +27,7 @@ async function run() {
       await MaintenanceLog.create({ websiteId: site._id, type: "uptime", status: "fail" });
     }
 
-    // 2️⃣ Weekly backup & SEO (once per 7 days)
+    // 2️⃣ Weekly backup (once per 7 days)
     const lastBackup = await MaintenanceLog.findOne({ websiteId: site._id, type: "backup" }).sort({ createdAt: -1 });
     if (!lastBackup || Date.now() - lastBackup.createdAt.getTime() > 7 * 24 * 3600 * 1000) {
       try {
@@ -47,10 +48,22 @@ async function run() {
         continue;
       }
 
+    }
+
+    // 3️⃣ Weekly SEO audit (once per 7 days)
+    const lastSeo = await MaintenanceLog.findOne({ websiteId: site._id, type: "seo" }).sort({ createdAt: -1 });
+    if (!lastSeo || Date.now() - lastSeo.createdAt.getTime() > 7 * 24 * 3600 * 1000) {
       try {
-        const seo = await analyzeSite(site.deployUrl);
-        await MaintenanceLog.create({ websiteId: site._id, type: "seo", status: "success", details: seo });
-        site.meta.seoScore = seo.seoScore;
+        const html = await fetch(site.deployUrl).then((response) => response.text());
+        const analysis = await runSeoAgent(html);
+        const ai = await generateSeoRecommendations(analysis);
+        await MaintenanceLog.create({
+          websiteId: site._id,
+          type: "seo",
+          status: "success",
+          details: { analysis, ai },
+        });
+        site.meta.seoScore = analysis.score;
         await site.save();
       } catch (error) {
         await MaintenanceLog.create({

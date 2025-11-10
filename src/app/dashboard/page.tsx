@@ -630,6 +630,25 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
                   </p>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={async () => {
+                        const res = await fetch(`/api/seo/analyze/${getSiteId(site)}`, { method: "POST" });
+                        const data = (await res.json()) as {
+                          analysis?: { score: number };
+                          ai?: string;
+                          error?: string;
+                        };
+                        if (!res.ok || data.error) {
+                          alert(`SEO audit failed: ${data.error ?? res.statusText}`);
+                          return;
+                        }
+                        alert(`SEO Score: ${data.analysis?.score ?? "N/A"}\n\nAI Suggestions:\n${data.ai ?? "No suggestions"}`);
+                        void fetchSites();
+                      }}
+                      className="px-3 py-1 bg-purple-600 rounded-lg text-sm hover:bg-purple-700"
+                    >
+                      Run SEO Audit
+                    </button>
+                    <button
                       onClick={() => void handleRedeploy(getSiteId(site))}
                       className="px-3 py-1 bg-blue-600 rounded-lg text-sm hover:bg-blue-700"
                     >
