@@ -1,22 +1,26 @@
-import auth from "next-auth";
-import { authConfig } from "./auth.config";
+import { getServerSession } from "next-auth";
+import type { Session } from "next-auth";
 
-interface SessionUser {
-  user?: {
-    name?: string;
-    email?: string;
-    image?: string;
-  };
-}
+import { authConfig } from "./auth.config";
 
 export async function getSessionUserEmail(): Promise<string | null> {
   try {
-    const session = (await auth(authConfig)) as SessionUser; // 👈 typed cast
+    const session: Session | null = await getServerSession(authConfig);
+    const email = session?.user?.email;
+    if (email) {
+      return email;
+    }
 
-    const email = session.user?.email;
-    return typeof email === "string" && email.length > 0 ? email : null;
-  } catch (error) {
-    console.warn("Failed to resolve server session", error);
+    if (process.env.DEMO_USER_EMAIL) {
+      return process.env.DEMO_USER_EMAIL;
+    }
+
+    return null;
+  } catch {
+    if (process.env.DEMO_USER_EMAIL) {
+      return process.env.DEMO_USER_EMAIL;
+    }
+
     return null;
   }
 }
