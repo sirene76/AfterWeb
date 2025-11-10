@@ -4,7 +4,6 @@ const f = createUploadthing();
 
 export const ourFileRouter = {
   websiteZip: f({ zip: { maxFileSize: "25MB" } }).onUploadComplete(async ({ file }) => {
-    console.log("Uploaded file to R2:", file.url);
     return { fileUrl: file.url };
   }),
 } satisfies FileRouter;
