@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
 
 import connectDB from "@/lib/db";
 import { constructStripeEvent } from "@/lib/stripe";
 import Website, { type WebsiteBillingStatus } from "@/models/Website";
 
+// === Types ===
 type CheckoutSession = {
   metadata?: Record<string, string>;
   subscription?: string;
@@ -15,6 +17,7 @@ type Subscription = {
   status: string;
 };
 
+// === Status Mapping ===
 const BILLING_STATUS_MAP: Record<string, WebsiteBillingStatus> = {
   active: "active",
   trialing: "active",
@@ -30,59 +33,69 @@ function mapStripeStatus(status: string): WebsiteBillingStatus {
   return BILLING_STATUS_MAP[status] ?? "inactive";
 }
 
+// === Webhook Handler ===
 export async function POST(req: Request) {
-  const signature = req.headers.get("stripe-signature");
-  const rawBody = Buffer.from(await req.arrayBuffer());
+  const hdrs = await headers();                           // ✅ await it
+  const signature = hdrs.get("stripe-signature");          // ✅ now works
+  const rawBody = Buffer.from(await req.arrayBuffer());    // correct body read
 
   let event;
   try {
     event = constructStripeEvent(rawBody, signature);
   } catch (error) {
-    console.error("Webhook signature error:", error);
+    console.error("❌ Webhook signature error:", error);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
   await connectDB();
 
-  switch (event.type) {
-    case "checkout.session.completed": {
-      const session = event.data.object as CheckoutSession;
-      const websiteId = session.metadata?.websiteId;
-      const plan = session.metadata?.plan as string | undefined;
-      const subscriptionId = session.subscription;
-      const customerId = session.customer;
+  try {
+    switch (event.type) {
+      case "checkout.session.completed": {
+        const session = event.data.object as CheckoutSession;
+        const websiteId = session.metadata?.websiteId;
+        const plan = session.metadata?.plan as string | undefined;
+        const subscriptionId = session.subscription;
+        const customerId = session.customer;
 
-      if (websiteId && plan) {
-        await Website.findByIdAndUpdate(websiteId, {
-          plan,
-          billingStatus: "active",
-          stripeCustomerId: customerId,
-          stripeSubscriptionId: subscriptionId,
-        });
+        if (websiteId && plan) {
+          await Website.findByIdAndUpdate(websiteId, {
+            plan,
+            billingStatus: "active",
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: subscriptionId,
+          });
+        }
+        break;
       }
-      break;
-    }
-    case "customer.subscription.updated": {
-      const subscription = event.data.object as Subscription;
-      const status = mapStripeStatus(subscription.status);
 
-      await Website.findOneAndUpdate(
-        { stripeSubscriptionId: subscription.id },
-        { billingStatus: status },
-      );
-      break;
+      case "customer.subscription.updated": {
+        const subscription = event.data.object as Subscription;
+        const status = mapStripeStatus(subscription.status);
+
+        await Website.findOneAndUpdate(
+          { stripeSubscriptionId: subscription.id },
+          { billingStatus: status },
+        );
+        break;
+      }
+
+      case "customer.subscription.deleted": {
+        const subscription = event.data.object as Subscription;
+        await Website.findOneAndUpdate(
+          { stripeSubscriptionId: subscription.id },
+          { billingStatus: "canceled" },
+        );
+        break;
+      }
+
+      default:
+        console.log(`Unhandled Stripe event type: ${event.type}`);
     }
-    case "customer.subscription.deleted": {
-      const subscription = event.data.object as Subscription;
-      await Website.findOneAndUpdate(
-        { stripeSubscriptionId: subscription.id },
-        { billingStatus: "canceled" },
-      );
-      break;
-    }
-    default:
-      console.log(`Unhandled Stripe event type: ${event.type}`);
+
+    return NextResponse.json({ received: true });
+  } catch (err) {
+    console.error("Webhook processing error:", err);
+    return NextResponse.json({ error: "Processing error" }, { status: 500 });
   }
-
-  return NextResponse.json({ received: true });
 }

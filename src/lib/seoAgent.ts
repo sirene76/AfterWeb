@@ -6,14 +6,13 @@ export async function runSeoAgent(html: string) {
   const title = $("title").text().trim();
   const description = $('meta[name="description"]').attr("content") || "";
 
-  // ✅ Explicitly type parameters to avoid implicit 'any'
+  // ✅ use 'any' instead of cheerio.Element
   const headings = $("h1,h2,h3")
-    .map((_: number, el: cheerio.Element) => $(el).text())
+    .map((_: number, el: any) => $(el).text())
     .get();
 
   const links = $("a").length;
 
-  // ✅ Basic scoring logic
   let score = 50;
   if (title) score += 10;
   if (description) score += 10;
