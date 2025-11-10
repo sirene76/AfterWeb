@@ -1,11 +1,12 @@
 "use client";
 
-import { DragEvent, useEffect, useRef, useState } from "react";
+import { DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { generateReactHelpers } from "@uploadthing/react";
 import Lottie from "lottie-react";
 
 import type { OurFileRouter } from "@/app/api/uploadthing/core";
+import { canManageBilling as canManageBillingForRole, canViewOnly } from "@/lib/permissions";
 
 const { useUploadThing } = generateReactHelpers<OurFileRouter>();
 import successAnim from "../../../public/lottie/success.json";
@@ -29,6 +30,15 @@ type MaintenanceEntry = {
 
 type WebsitePlan = "basic" | "standard" | "pro";
 type WebsiteBillingStatus = "inactive" | "active" | "past_due" | "canceled";
+
+type AccountRole = "owner" | "member" | "client";
+
+type Account = {
+  _id: string;
+  name: string;
+  type: string;
+  role: AccountRole;
+};
 
 type Website = {
   _id?: string;
@@ -99,6 +109,9 @@ function getSiteId(site: Website) {
 
 export default function Dashboard() {
   const [sites, setSites] = useState<Website[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [sitesLoading, setSitesLoading] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -129,12 +142,27 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
         showMessage("✅ Upload successful! Analyzing...", "info");
 
         try {
+          if (!selectedAccountId) {
+            showMessage("⚠️ Select a workspace before uploading.", "warning");
+            setUploadProgress(null);
+            setUploading(false);
+            return;
+          }
+
+          if (!canManageWorkspace) {
+            showMessage("⚠️ You have view-only access to this workspace.", "warning");
+            setUploadProgress(null);
+            setUploading(false);
+            return;
+          }
+
           const response = await fetch("/api/upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               fileUrl,
               userEmail: "demo@afterweb.dev",
+              accountId: selectedAccountId,
             }),
           });
 
@@ -188,20 +216,69 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
     },
   );
   const isBusy = uploading || uploadThingUploading;
-const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
+  const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
 
-  async function fetchSites() {
+  const fetchAccounts = useCallback(async () => {
     try {
-      const res = await fetch("/api/websites");
+      const res = await fetch("/api/accounts");
       if (!res.ok) {
-        throw new Error("Failed to fetch sites");
+        throw new Error("Failed to load accounts");
       }
-      const data = (await res.json()) as WebsitesResponse;
-      setSites(normalizeSites(data));
+      const data = (await res.json()) as Account[];
+      setAccounts(data);
+      if (data.length === 0) {
+        setSelectedAccountId(null);
+        return;
+      }
+
+      if (!selectedAccountId) {
+        setSelectedAccountId(data[0]._id);
+        return;
+      }
+
+      const stillExists = data.some((account) => account._id === selectedAccountId);
+      if (!stillExists) {
+        setSelectedAccountId(data[0]._id);
+      }
     } catch (error) {
-      console.error("Failed to load sites", error);
+      console.error("Failed to load accounts", error);
     }
-  }
+  }, [selectedAccountId]);
+
+  const fetchSites = useCallback(
+    async (accountId?: string) => {
+      const targetAccountId = accountId ?? selectedAccountId;
+      if (!targetAccountId) {
+        setSites([]);
+        return;
+      }
+      try {
+        setSitesLoading(true);
+        const res = await fetch(`/api/websites?accountId=${targetAccountId}`);
+        if (!res.ok) {
+          throw new Error("Failed to fetch sites");
+        }
+        const data = (await res.json()) as WebsitesResponse;
+        setSites(normalizeSites(data));
+      } catch (error) {
+        console.error("Failed to load sites", error);
+      } finally {
+        setSitesLoading(false);
+      }
+    },
+    [selectedAccountId],
+  );
+
+  const activeAccount = useMemo(
+    () => accounts.find((account) => account._id === selectedAccountId) ?? null,
+    [accounts, selectedAccountId],
+  );
+
+  const accountRole: AccountRole = activeAccount?.role ?? "member";
+  const isViewOnly = canViewOnly(accountRole);
+  const billingAllowed = canManageBillingForRole(accountRole);
+  const canManageWorkspace = !isViewOnly;
+  const isUploadDisabled = isBusy || !canManageWorkspace || !selectedAccountId;
 
   function renderMaintenanceStatus(label: string, entry?: MaintenanceEntry) {
     let className = "text-gray-500";
@@ -230,6 +307,10 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
   }
 
   async function handleRedeploy(siteId: string) {
+    if (!canManageWorkspace) {
+      showMessage("⚠️ You have view-only access to this workspace.", "warning");
+      return;
+    }
     try {
       showMessage("🚀 Redeploying site...", "info");
       const res = await fetch(`/api/deploy/${siteId}`, { method: "POST" });
@@ -247,6 +328,10 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
   }
 
   async function handleBackup(siteId: string) {
+    if (!canManageWorkspace) {
+      showMessage("⚠️ You have view-only access to this workspace.", "warning");
+      return;
+    }
     try {
       showMessage("💾 Starting backup...", "info");
       const res = await fetch(`/api/backup/${siteId}`, { method: "POST" });
@@ -264,6 +349,14 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
   }
 
   async function startCheckoutFlow(websiteId: string, targetPlan: WebsitePlan) {
+    if (!billingAllowed) {
+      showMessage("⚠️ You do not have permission to manage billing.", "warning");
+      return;
+    }
+    if (!selectedAccountId) {
+      showMessage("⚠️ Select a workspace before managing billing.", "warning");
+      return;
+    }
     const checkoutKey = `${websiteId}:${targetPlan}`;
     try {
       setCheckoutLoading(checkoutKey);
@@ -304,6 +397,16 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
   async function handleUpload(selectedFile?: File) {
     if (isBusy) return;
 
+    if (!selectedAccountId) {
+      showMessage("⚠️ Select a workspace before uploading.", "warning");
+      return;
+    }
+
+    if (!canManageWorkspace) {
+      showMessage("⚠️ You have view-only access to this workspace.", "warning");
+      return;
+    }
+
     const uploadFile = selectedFile ?? file;
     if (!uploadFile) {
       showMessage("⚠️ Please select a .zip file.", "warning");
@@ -335,6 +438,10 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
       setUploading(false);
     }
   }
+
+  useEffect(() => {
+    void fetchAccounts();
+  }, [fetchAccounts]);
 
   useEffect(() => {
     let isMounted = true;
@@ -418,12 +525,12 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
         messageTimeoutRef.current = null;
       }
     };
-  }, []);
+  }, [fetchSites]);
 
   function handleDragEnter(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
-    if (isBusy) return;
+    if (isUploadDisabled) return;
     dragDepthRef.current += 1;
     if (!dragActive) {
       setDragActive(true);
@@ -433,7 +540,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
   function handleDragOver(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
-    if (isBusy) return;
+    if (isUploadDisabled) return;
     if (!dragActive) {
       setDragActive(true);
     }
@@ -453,7 +560,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
     event.stopPropagation();
     dragDepthRef.current = 0;
     setDragActive(false);
-    if (isBusy) return;
+    if (isUploadDisabled) return;
 
     const droppedFile = event.dataTransfer.files?.[0];
     if (!droppedFile) return;
@@ -465,9 +572,16 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
   }
 
   function openFileDialog() {
-    if (!isBusy) {
-      fileInputRef.current?.click();
+    if (isBusy) return;
+    if (!selectedAccountId) {
+      showMessage("⚠️ Select a workspace before uploading.", "warning");
+      return;
     }
+    if (!canManageWorkspace) {
+      showMessage("⚠️ You have view-only access to this workspace.", "warning");
+      return;
+    }
+    fileInputRef.current?.click();
   }
 
   const faviconSrc = lastUploaded?.meta.faviconUrl?.startsWith("data:")
@@ -477,22 +591,61 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
 
   return (
     <div className="min-h-screen bg-gray-950 p-8 text-white">
-      <motion.h1
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="mb-4 text-3xl font-bold"
-      >
-        Your Uploaded Sites
-      </motion.h1>
-      <motion.p
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, delay: 0.1 }}
-        className="mb-8 text-gray-400"
-      >
-        Upload a <code>.zip</code> folder of your static website (index.html required).
-      </motion.p>
+      <div className="mb-8 flex flex-wrap items-start justify-between gap-6">
+        <div className="space-y-3">
+          <motion.h1
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4 }}
+            className="text-3xl font-bold"
+          >
+            Dashboard
+          </motion.h1>
+          <motion.p
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.4, delay: 0.1 }}
+            className="text-gray-400"
+          >
+            Manage websites per workspace (agency/client) and review automation status.
+          </motion.p>
+          <p className="text-sm text-gray-500">
+            Upload a <code>.zip</code> folder of your static website (index.html required).
+          </p>
+          {activeAccount && (
+            <p className="text-xs text-gray-500">
+              Role: <span className="font-semibold text-gray-300 capitalize">{accountRole}</span>
+            </p>
+          )}
+        </div>
+        <div className="flex min-w-[220px] flex-col items-start gap-2">
+          <span className="text-xs uppercase tracking-wide text-gray-400">Workspace</span>
+          <select
+            className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            value={selectedAccountId ?? ""}
+            onChange={(event) => {
+              const next = event.target.value;
+              setSelectedAccountId(next || null);
+            }}
+            disabled={accounts.length === 0}
+          >
+            {accounts.length === 0 ? (
+              <option value="">No workspaces available</option>
+            ) : (
+              accounts.map((account) => (
+                <option key={account._id} value={account._id}>
+                  {account.name} ({account.role})
+                </option>
+              ))
+            )}
+          </select>
+          {isViewOnly && (
+            <p className="text-xs text-amber-400">
+              View-only access. Uploads and upgrades are disabled.
+            </p>
+          )}
+        </div>
+      </div>
 
       <motion.div
         onClick={openFileDialog}
@@ -506,7 +659,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
           dragActive
             ? "border-blue-400 bg-blue-900/20"
             : "border-gray-800 bg-gray-900 hover:border-gray-600 hover:bg-gray-900/70"
-        } ${isBusy ? "pointer-events-none opacity-80" : ""}`}
+        } ${isUploadDisabled ? "pointer-events-none opacity-80" : ""}`}
         role="button"
         tabIndex={0}
       >
@@ -566,7 +719,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
               event.stopPropagation();
               openFileDialog();
             }}
-            disabled={isBusy}
+            disabled={isUploadDisabled}
             className="mt-6 inline-flex items-center gap-2 rounded-lg bg-blue-500 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:cursor-not-allowed disabled:bg-blue-500/60"
           >
             {isBusy ? "Uploading..." : "Choose File"}
@@ -574,7 +727,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
         </motion.div>
 
         <AnimatePresence>
-          {file && !isBusy && (
+          {file && !isBusy && canManageWorkspace && (
             <motion.div
               key="file-preview"
               initial={{ opacity: 0, y: 10 }}
@@ -693,7 +846,9 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
       </AnimatePresence>
 
       <div className="mt-12">
-        {sites.length === 0 ? (
+        {sitesLoading ? (
+          <p className="text-sm text-gray-400">Loading websites for this workspace...</p>
+        ) : sites.length === 0 ? (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -715,6 +870,9 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
               const canAccessAutoReports = isBillingActive && plan === "pro";
               const upgradeTargets: WebsitePlan[] =
                 plan === "basic" ? ["standard", "pro"] : plan === "standard" ? ["pro"] : [];
+              const premiumEnabled = canManageWorkspace && canAccessPremium;
+              const autoReportsEnabled = canManageWorkspace && canAccessAutoReports;
+              const upgradeAllowed = billingAllowed && upgradeTargets.length > 0;
 
               return (
                 <motion.div
@@ -747,7 +905,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
                       )}
                     </div>
                   </div>
-                  {upgradeTargets.length > 0 && (
+                  {upgradeAllowed && (
                     <div className="mb-3 flex flex-wrap gap-2">
                       {upgradeTargets.map((targetPlan) => {
                         const checkoutKey = `${siteId}:${targetPlan}`;
@@ -756,7 +914,7 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
                           <button
                             key={targetPlan}
                             onClick={() => void startCheckoutFlow(siteId, targetPlan)}
-                            disabled={isLoading}
+                            disabled={isLoading || !billingAllowed}
                             className="mt-1 rounded-lg bg-amber-500 px-3 py-1 text-sm font-medium text-gray-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-amber-700/60 disabled:text-gray-400"
                           >
                             {isLoading ? "Redirecting..." : `Upgrade to ${PLAN_LABELS[targetPlan]}`}
@@ -802,6 +960,10 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         onClick={async () => {
+                          if (!canManageWorkspace) {
+                            showMessage("⚠️ You have view-only access to this workspace.", "warning");
+                            return;
+                          }
                           if (!canAccessPremium) {
                             showMessage("⚠️ Upgrade to Standard to unlock SEO audits.", "warning");
                             return;
@@ -823,9 +985,9 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
                           );
                           void fetchSites();
                         }}
-                        disabled={!canAccessPremium}
+                        disabled={!premiumEnabled}
                         className={`rounded-lg px-3 py-1 text-sm transition ${
-                          canAccessPremium
+                          premiumEnabled
                             ? "bg-purple-600 hover:bg-purple-700"
                             : "cursor-not-allowed bg-gray-700 text-gray-400"
                         }`}
@@ -834,21 +996,30 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
                       </button>
                       <button
                         onClick={() => void handleRedeploy(siteId)}
-                        className="rounded-lg bg-blue-600 px-3 py-1 text-sm transition hover:bg-blue-700"
+                        disabled={!canManageWorkspace}
+                        className={`rounded-lg px-3 py-1 text-sm transition ${
+                          canManageWorkspace
+                            ? "bg-blue-600 hover:bg-blue-700"
+                            : "cursor-not-allowed bg-gray-700 text-gray-400"
+                        }`}
                       >
                         Redeploy
                       </button>
                       <button
                         onClick={() => {
+                          if (!canManageWorkspace) {
+                            showMessage("⚠️ You have view-only access to this workspace.", "warning");
+                            return;
+                          }
                           if (!canAccessPremium) {
                             showMessage("⚠️ Upgrade to Standard to unlock backups.", "warning");
                             return;
                           }
                           void handleBackup(siteId);
                         }}
-                        disabled={!canAccessPremium}
+                        disabled={!premiumEnabled}
                         className={`ml-2 rounded-lg px-3 py-1 text-sm transition ${
-                          canAccessPremium
+                          premiumEnabled
                             ? "bg-blue-600 hover:bg-blue-700"
                             : "cursor-not-allowed bg-gray-700 text-gray-400"
                         }`}
@@ -857,15 +1028,19 @@ const maxUploadSize = routeConfig?.blob?.maxFileSize ?? "32MB";
                       </button>
                       <button
                         onClick={() => {
+                          if (!canManageWorkspace) {
+                            showMessage("⚠️ You have view-only access to this workspace.", "warning");
+                            return;
+                          }
                           if (!canAccessAutoReports) {
                             showMessage("⚠️ Upgrade to Pro for automated reports.", "warning");
                             return;
                           }
                           showMessage("✅ Weekly reports are automatically emailed to Pro clients.", "success");
                         }}
-                        disabled={!canAccessAutoReports}
+                        disabled={!autoReportsEnabled}
                         className={`rounded-lg px-3 py-1 text-sm transition ${
-                          canAccessAutoReports
+                          autoReportsEnabled
                             ? "bg-green-600 hover:bg-green-700"
                             : "cursor-not-allowed bg-gray-700 text-gray-400"
                         }`}

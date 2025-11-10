@@ -1,4 +1,4 @@
-import { Schema, model, models, type Document } from "mongoose";
+import { Schema, model, models, type Document, type Types } from "mongoose";
 
 export interface WebsiteMeta {
   pages: number;
@@ -15,6 +15,7 @@ export type WebsiteBillingStatus = "inactive" | "active" | "past_due" | "cancele
 export interface WebsiteDocument extends Document {
   name: string;
   userEmail: string;
+  accountId?: Types.ObjectId;
   status: "uploaded" | "analyzed" | "deployed" | "failed";
   deployUrl?: string;
   archiveUrl?: string;
@@ -32,6 +33,7 @@ const WebsiteSchema = new Schema<WebsiteDocument>(
   {
     name: { type: String, required: true },
     userEmail: { type: String, required: true, index: true },
+    accountId: { type: Schema.Types.ObjectId, ref: "Account", index: true },
     status: {
       type: String,
       enum: ["uploaded", "analyzed", "deployed", "failed"],
