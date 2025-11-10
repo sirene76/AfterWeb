@@ -1,47 +1,45 @@
-import { NextRequest, NextResponse } from "next/server";
+import { randomUUID } from "crypto";
+import { mkdir, writeFile } from "fs/promises";
+import path from "path";
+import { NextResponse } from "next/server";
 
 import { analyzeSite } from "@/lib/analyzeSite";
 import { connectToDatabase } from "@/lib/db";
 import { extractZip } from "@/lib/extractZip";
 import Website from "@/models/Website";
 
-interface UploadPayload {
-  fileUrl?: string;
-  userEmail?: string;
-}
+export async function POST(req: Request) {
+  const contentType = req.headers.get("content-type") || "";
 
-export async function POST(request: NextRequest) {
+  if (!contentType.includes("multipart/form-data")) {
+    return NextResponse.json({ error: "Unsupported content type" }, { status: 415 });
+  }
+
   try {
-    const payload = (await request.json()) as UploadPayload;
-    const { fileUrl, userEmail } = payload;
+    const form = await req.formData();
+    const file = form.get("file");
+    const userEmail = (form.get("userEmail") as string) || "anonymous@afterweb.dev";
 
-    if (!fileUrl || !userEmail) {
-      return NextResponse.json(
-        { error: "fileUrl and userEmail are required" },
-        { status: 400 },
-      );
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    const response = await fetch(fileUrl);
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: `Failed to download file: ${response.statusText}` },
-        { status: 400 },
-      );
-    }
+    const buffer = Buffer.from(await file.arrayBuffer());
 
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    const files = extractZip(buffer);
-    const analysis = analyzeSite(files);
+    const uploadDir = path.join("/tmp", "afterweb-uploads");
+    await mkdir(uploadDir, { recursive: true });
+    const filePath = path.join(uploadDir, `${randomUUID()}-${file.name}`);
+    await writeFile(filePath, buffer);
+
+    const extracted = extractZip(buffer);
+    const analysis = analyzeSite(extracted);
 
     await connectToDatabase();
 
-    const website = await Website.create({
-      name: analysis.title || "Untitled Site",
+    const site = await Website.create({
+      name: analysis.title || "Uploaded Site",
       userEmail,
       status: "analyzed",
-      deployUrl: "",
       meta: {
         pages: analysis.pageCount,
         scripts: analysis.scriptCount,
@@ -51,9 +49,9 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({ siteId: website._id.toString() }, { status: 201 });
+    return NextResponse.json({ siteId: site._id.toString(), message: "Upload successful" });
   } catch (error) {
-    console.error("Upload route error", error);
-    return NextResponse.json({ error: "Unexpected error" }, { status: 500 });
+    console.error("Error handling upload", error);
+    return NextResponse.json({ error: "Failed to process upload" }, { status: 500 });
   }
 }
