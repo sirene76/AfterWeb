@@ -2,11 +2,11 @@
 
 import { DragEvent, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useUploadThing } from "@uploadthing/react";
+import { useUploadThing } from "uploadthing/react";
 import Lottie from "lottie-react";
 
 import type { OurFileRouter } from "@/app/api/uploadthing/core";
-import successAnim from "@/public/lottie/success.json";
+import successAnim from "../../../public/lottie/success.json";
 
 type MessageTone = "success" | "error" | "warning" | "info" | "";
 
