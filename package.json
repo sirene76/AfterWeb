@@ -18,7 +18,7 @@
     "node-cron": "^3.0.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "swr": "^2.2.5",
+    "swr": "^2.3.6",
     "uploadthing": "^6.12.1"
   },
   "devDependencies": {
@@ -32,7 +32,7 @@
     "eslint-config-next": "15.5.6",
     "postcss": "^8.4.47",
     "tailwindcss": "^4",
-    "tsx": "^4.19.2",
+    "tsx": "^4.20.6",
     "typescript": "^5"
   }
 }
