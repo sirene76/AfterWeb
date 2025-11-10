@@ -26,6 +26,7 @@ export async function POST(
     return NextResponse.json({ success: true, deployUrl });
   } catch (error) {
     console.error("Deploy route error", error);
-    return NextResponse.json({ error: "Failed to deploy site" }, { status: 500 });
+    const message = error instanceof Error ? error.message : "Failed to deploy site";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
