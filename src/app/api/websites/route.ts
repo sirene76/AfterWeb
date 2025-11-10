@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { getSessionUserEmail } from "@/lib/auth";
 import connectDB from "@/lib/db";
 import MaintenanceLog, { type MaintenanceLogType } from "@/models/MaintenanceLog";
+import AccountMember from "@/models/AccountMember";
 import Website from "@/models/Website";
 import { Types } from "mongoose";
 
@@ -80,10 +82,38 @@ export async function GET(request: NextRequest) {
     await connectDB();
 
     const { searchParams } = request.nextUrl;
-    const userEmail = searchParams.get("userEmail") ?? undefined;
+    const accountIdParam = searchParams.get("accountId");
 
-    const query = userEmail ? { userEmail } : {};
-    const websites = await Website.find(query).sort({ createdAt: -1 }).lean();
+    const userEmail = await getSessionUserEmail();
+    if (!userEmail) {
+      return NextResponse.json({ websites: [] });
+    }
+
+    const accountIds: string[] = [];
+
+    if (accountIdParam) {
+      if (!Types.ObjectId.isValid(accountIdParam)) {
+        return NextResponse.json({ websites: [] });
+      }
+
+      const membership = await AccountMember.findOne({ userEmail, accountId: accountIdParam }).lean();
+      if (!membership) {
+        return NextResponse.json({ websites: [] });
+      }
+      accountIds.push(accountIdParam);
+    } else {
+      const memberships = await AccountMember.find({ userEmail }).lean();
+      if (memberships.length === 0) {
+        return NextResponse.json({ websites: [] });
+      }
+      memberships.forEach((membership) => {
+        accountIds.push(membership.accountId.toString());
+      });
+    }
+
+    const websites = await Website.find({ accountId: { $in: accountIds } })
+      .sort({ createdAt: -1 })
+      .lean();
     const websiteIds = websites.map((site) => site._id.toString());
     const maintenanceSummaries = await getMaintenanceSummaries(websiteIds);
     const lastCheckMap = await getLastCheckMap(websiteIds);
@@ -97,6 +127,9 @@ export async function GET(request: NextRequest) {
         status: site.status,
         deployUrl: site.deployUrl ?? "",
         userEmail: site.userEmail,
+        accountId: site.accountId?.toString?.() ?? "",
+        plan: site.plan,
+        billingStatus: site.billingStatus,
         meta: {
           pages: site.meta?.pages ?? 0,
           scripts: site.meta?.scripts ?? 0,
