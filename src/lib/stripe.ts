@@ -23,15 +23,30 @@ if (!process.env.STRIPE_SECRET_KEY) {
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
-async function stripeRequest<T>(endpoint: string, body: URLSearchParams): Promise<T> {
-  const response = await fetch(`${STRIPE_API_BASE}/${endpoint}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: body.toString(),
-  });
+type StripeRequestOptions = {
+  method?: "GET" | "POST";
+  body?: URLSearchParams;
+};
+
+async function stripeRequest<T>(
+  endpoint: string,
+  { method = "POST", body }: StripeRequestOptions = {},
+): Promise<T> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+  };
+
+  const requestInit: RequestInit = {
+    method,
+    headers,
+  };
+
+  if (body) {
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    requestInit.body = body.toString();
+  }
+
+  const response = await fetch(`${STRIPE_API_BASE}/${endpoint}`, requestInit);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -95,8 +110,15 @@ export const stripe = {
           }
         }
 
-        return stripeRequest<{ url: string; id: string }>("checkout/sessions", body);
+        return stripeRequest<{ url: string; id: string }>("checkout/sessions", {
+          body,
+        });
       },
+    },
+  },
+  subscriptions: {
+    async retrieve<T = unknown>(id: string) {
+      return stripeRequest<T>(`subscriptions/${id}`, { method: "GET" });
     },
   },
 };
