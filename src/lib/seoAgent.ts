@@ -1,13 +1,19 @@
-import cheerio from "cheerio";
+import * as cheerio from "cheerio";
 
 export async function runSeoAgent(html: string) {
   const $ = cheerio.load(html);
 
   const title = $("title").text().trim();
   const description = $('meta[name="description"]').attr("content") || "";
-  const headings = $("h1,h2,h3").map((_, el) => $(el).text()).get();
+
+  // ✅ Explicitly type parameters to avoid implicit 'any'
+  const headings = $("h1,h2,h3")
+    .map((_: number, el: cheerio.Element) => $(el).text())
+    .get();
+
   const links = $("a").length;
 
+  // ✅ Basic scoring logic
   let score = 50;
   if (title) score += 10;
   if (description) score += 10;
