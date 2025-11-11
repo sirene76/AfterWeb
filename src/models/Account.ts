@@ -1,30 +1,10 @@
-import { Schema, model, models, type Document } from "mongoose";
+import mongoose, { Schema, model, models } from "mongoose";
 
-type AccountType = "agency" | "personal" | "client";
+const AccountSchema = new Schema({
+  name: { type: String, required: true },
+  type: { type: String, default: "personal" },
+  ownerEmail: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
 
-export interface AccountDocument extends Document {
-  name: string;
-  type: AccountType;
-  ownerEmail: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const AccountSchema = new Schema<AccountDocument>(
-  {
-    name: { type: String, required: true },
-    type: {
-      type: String,
-      enum: ["agency", "personal", "client"],
-      default: "agency",
-    },
-    ownerEmail: { type: String, required: true, index: true },
-  },
-  {
-    timestamps: true,
-  },
-);
-
-const Account = models.Account || model<AccountDocument>("Account", AccountSchema);
-
-export default Account;
+export default models.Account || model("Account", AccountSchema);
