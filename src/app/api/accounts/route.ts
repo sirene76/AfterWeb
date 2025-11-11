@@ -27,10 +27,10 @@ export async function GET() {
   }, {});
 
   const payload = accounts.map((account) => ({
-    _id: account._id.toString(),
+    _id: account._id?.toString?.() ?? "",
     name: account.name,
     type: account.type,
-    role: roleByAccountId[account._id.toString()] ?? "member",
+    role: roleByAccountId[account._id?.toString?.() ?? ""] ?? "member",
   }));
 
   return NextResponse.json(payload);

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import connectDB from "@/lib/db";
 import { stripe } from "@/lib/stripe";
+import Stripe from "stripe";
 import Website, { type WebsiteBillingStatus, type WebsitePlan } from "@/models/Website";
 
 const BILLING_STATUS_MAP: Record<string, WebsiteBillingStatus> = {
@@ -58,8 +59,10 @@ export async function POST(req: Request) {
     if (!site.stripeSubscriptionId) {
       return NextResponse.json({ error: "No subscription linked" }, { status: 400 });
     }
+const subscription = (await stripe.subscriptions.retrieve(
+  site.stripeSubscriptionId
+)) as Stripe.Subscription;
 
-    const subscription = await stripe.subscriptions.retrieve(site.stripeSubscriptionId);
 
     site.billingStatus = mapStripeStatus(subscription.status);
 

@@ -44,7 +44,7 @@ export async function POST(
       success: response.ok,
       statusCode: response.status,
       durationMs,
-      logId: log._id.toString(),
+      logId: (log as any)._id.toString(),
     });
   } catch (error) {
     console.error("Ping route error", error);

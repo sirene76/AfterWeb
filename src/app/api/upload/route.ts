@@ -92,11 +92,16 @@ export async function POST(req: Request) {
 
     const projectName = process.env.CLOUDFLARE_PROJECT_NAME;
     const token = process.env.CLOUDFLARE_API_TOKEN;
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 
     if (projectName && token && accountId) {
       try {
-        const deployUrl = await deployToCloudflare(fileUrl, projectName, token, accountId);
+const deployUrl = await deployToCloudflare(
+  fileUrl,
+  projectName!,
+  token!,
+  cloudflareAccountId!
+);
         if (deployUrl) {
           site.deployUrl = deployUrl;
         }
