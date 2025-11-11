@@ -1,7 +1,8 @@
 import type { NextAuthConfig } from "next-auth";
 import GitHub from "next-auth/providers/github";
-import Google from "next-auth/providers/google";
-import Email from "next-auth/providers/email";
+import Credentials from "next-auth/providers/credentials";
+
+const demoEmail = process.env.DEMO_USER_EMAIL ?? "demo@afterweb.dev";
 
 const providers: NextAuthConfig["providers"] = [];
 
@@ -14,45 +15,50 @@ if (process.env.GITHUB_ID && process.env.GITHUB_SECRET) {
   );
 }
 
-if (process.env.GOOGLE_ID && process.env.GOOGLE_SECRET) {
-  providers.push(
-    Google({
-      clientId: process.env.GOOGLE_ID,
-      clientSecret: process.env.GOOGLE_SECRET,
-    }),
-  );
-}
-
-if (process.env.NODE_ENV === "development" || providers.length === 0) {
-  providers.push(
-    Email({
-      server: process.env.EMAIL_SERVER ?? "smtp://user:pass@smtp.localhost:587",
-      from: process.env.EMAIL_FROM ?? "noreply@afterweb.dev",
-    }),
-  );
-}
+providers.push(
+  Credentials({
+    name: "Demo",
+    credentials: {},
+    async authorize() {
+      return {
+        id: "demo-user",
+        email: demoEmail,
+        name: "Demo User",
+      };
+    },
+  }),
+);
 
 export const authConfig = {
   secret: process.env.NEXTAUTH_SECRET,
   providers,
   callbacks: {
-    async session({ session }) {
-      // ✅ If user.email missing, safely assign demo fallback
-      if (!session.user?.email && process.env.DEMO_USER_EMAIL) {
-        session.user = {
-          ...session.user,
-          email: process.env.DEMO_USER_EMAIL,
-          name: "Demo User",
-          image: "https://avatars.githubusercontent.com/u/00000000?v=4",
-        } as any; // 👈 cast to 'any' to avoid type conflict
+    async session({ session, token }) {
+      const fallbackEmail = token?.email ?? demoEmail;
+
+      if (!session.user) {
+        session.user = {} as typeof session.user;
       }
+
+      session.user = {
+        ...session.user,
+        email: session.user?.email ?? fallbackEmail,
+        name: session.user?.name ?? "Demo User",
+        image: session.user?.image ?? "https://avatars.githubusercontent.com/u/0?v=4",
+      } as typeof session.user;
+
+      (session.user as typeof session.user & { role?: string }).role = "user";
+
       return session;
     },
-    async signIn({ user }) {
-      if (!user?.email && process.env.DEMO_USER_EMAIL) {
-        (user as any).email = process.env.DEMO_USER_EMAIL;
+    async jwt({ token, user }) {
+      if (user?.email) {
+        token.email = user.email;
+      } else if (!token.email) {
+        token.email = demoEmail;
       }
-      return true;
+
+      return token;
     },
   },
 } satisfies NextAuthConfig;
