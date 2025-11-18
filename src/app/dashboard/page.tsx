@@ -120,6 +120,9 @@ export default function Dashboard() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [lastUploaded, setLastUploaded] = useState<UploadSummary | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [creating, setCreating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragDepthRef = useRef(0);
   const messageTimeoutRef = useRef<number | null>(null);
@@ -278,7 +281,8 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
   const isViewOnly = canViewOnly(accountRole);
   const billingAllowed = canManageBillingForRole(accountRole);
   const canManageWorkspace = !isViewOnly;
-  const isUploadDisabled = isBusy || !canManageWorkspace || !selectedAccountId;
+  const isUploadDisabled =
+    isBusy || !canManageWorkspace || !selectedAccountId || accounts.length === 0;
 
   function renderMaintenanceStatus(label: string, entry?: MaintenanceEntry) {
     let className = "text-gray-500";
@@ -393,6 +397,33 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
       }, duration);
     }
   }
+
+  const handleCreateWorkspace = async () => {
+    if (!newWorkspaceName.trim()) return;
+    setCreating(true);
+
+    try {
+      const res = await fetch("/api/accounts/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newWorkspaceName }),
+      });
+
+      const data = await res.json();
+
+      if (data.ok && data.accountId) {
+        await fetchAccounts();
+        setSelectedAccountId(data.accountId);
+        setShowCreateModal(false);
+        setNewWorkspaceName("");
+        fetchSites(data.accountId);
+      }
+    } catch (err) {
+      console.error("Failed to create workspace", err);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   async function handleUpload(selectedFile?: File) {
     if (isBusy) return;
@@ -620,25 +651,33 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
         </div>
         <div className="flex min-w-[220px] flex-col items-start gap-2">
           <span className="text-xs uppercase tracking-wide text-gray-400">Workspace</span>
-          <select
-            className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            value={selectedAccountId ?? ""}
-            onChange={(event) => {
-              const next = event.target.value;
-              setSelectedAccountId(next || null);
-            }}
-            disabled={accounts.length === 0}
-          >
-            {accounts.length === 0 ? (
-              <option value="">No workspaces available</option>
-            ) : (
-              accounts.map((account) => (
-                <option key={account._id} value={account._id}>
-                  {account.name} ({account.role})
-                </option>
-              ))
-            )}
-          </select>
+          <div className="flex w-full items-center">
+            <select
+              className="w-full rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              value={selectedAccountId ?? ""}
+              onChange={(event) => {
+                const next = event.target.value;
+                setSelectedAccountId(next || null);
+              }}
+              disabled={accounts.length === 0}
+            >
+              {accounts.length === 0 ? (
+                <option value="">No workspaces available</option>
+              ) : (
+                accounts.map((account) => (
+                  <option key={account._id} value={account._id}>
+                    {account.name} ({account.role})
+                  </option>
+                ))
+              )}
+            </select>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 rounded-lg ml-4"
+            >
+              + Create Workspace
+            </button>
+          </div>
           {isViewOnly && (
             <p className="text-xs text-amber-400">
               View-only access. Uploads and upgrades are disabled.
@@ -1055,6 +1094,38 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
           </div>
         )}
       </div>
+
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border border-gray-700 p-6 rounded-xl w-80">
+            <h2 className="text-lg font-semibold mb-4">New Workspace</h2>
+
+            <input
+              value={newWorkspaceName}
+              onChange={(e) => setNewWorkspaceName(e.target.value)}
+              placeholder="Workspace name"
+              className="w-full px-3 py-2 rounded-lg bg-gray-800 border border-gray-700 text-white mb-4"
+            />
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg"
+              >
+                Cancel
+              </button>
+
+              <button
+                disabled={!newWorkspaceName.trim() || creating}
+                onClick={handleCreateWorkspace}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded-lg disabled:opacity-50"
+              >
+                {creating ? "Creating..." : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
