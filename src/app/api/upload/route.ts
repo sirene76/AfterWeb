@@ -8,6 +8,7 @@ import connectDB from "@/lib/db";
 import { deployToCloudflare } from "@/lib/deployToCloudflare";
 import { extractZip } from "@/lib/extractZip";
 import AccountMember from "@/models/AccountMember";
+import Log from "@/models/Log";
 import Website from "@/models/Website";
 
 export async function POST(req: Request) {
@@ -90,27 +91,60 @@ export async function POST(req: Request) {
       },
     });
 
+    await Log.create({
+      event: "upload",
+      status: "success",
+      message: `Upload processed for ${userEmail}`,
+      accountId: resolvedAccountId,
+      websiteId: site._id,
+      metadata: {
+        fileUrl,
+        meta: site.meta,
+      },
+    });
+
     const projectName = process.env.CLOUDFLARE_PROJECT_NAME;
     const token = process.env.CLOUDFLARE_API_TOKEN;
     const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 
     if (projectName && token && accountId) {
       try {
-const deployUrl = await deployToCloudflare(
-  fileUrl,
-  projectName!,
-  token!,
-  cloudflareAccountId!
-);
+        const deployUrl = await deployToCloudflare(
+          fileUrl,
+          projectName!,
+          token!,
+          cloudflareAccountId!,
+        );
         if (deployUrl) {
           site.deployUrl = deployUrl;
         }
         site.status = "deployed";
         await site.save();
+
+        await Log.create({
+          event: "deploy",
+          status: "success",
+          message: `Automatic deploy completed for ${site.name}`,
+          accountId: resolvedAccountId,
+          websiteId: site._id,
+          metadata: { deployUrl },
+        });
       } catch (deployError) {
         console.error("Automatic deployment failed", deployError);
         site.status = "failed";
         await site.save();
+
+        await Log.create({
+          event: "deploy",
+          status: "failure",
+          message: `Automatic deploy failed for ${site.name}`,
+          accountId: resolvedAccountId,
+          websiteId: site._id,
+          metadata: {
+            error:
+              deployError instanceof Error ? deployError.message : "Deployment failure",
+          },
+        });
       }
     }
 
@@ -127,6 +161,20 @@ const deployUrl = await deployToCloudflare(
     });
   } catch (error) {
     console.error("Error handling upload", error);
+    try {
+      await connectDB();
+      await Log.create({
+        event: "upload",
+        status: "failure",
+        message: error instanceof Error ? error.message : "Upload failed",
+        metadata: {
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+      });
+    } catch (logError) {
+      console.error("Failed to log upload error", logError);
+    }
+
     return NextResponse.json({ error: "Failed to process upload" }, { status: 500 });
   }
 }
