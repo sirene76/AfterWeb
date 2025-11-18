@@ -47,7 +47,8 @@ export const authConfig = {
         image: session.user?.image ?? "https://avatars.githubusercontent.com/u/0?v=4",
       } as typeof session.user;
 
-      (session.user as typeof session.user & { role?: string }).role = "user";
+      (session.user as typeof session.user & { role?: string; isAdmin?: boolean }).role = "user";
+      (session.user as typeof session.user & { isAdmin?: boolean }).isAdmin = token.isAdmin === true;
 
       return session;
     },
@@ -57,6 +58,8 @@ export const authConfig = {
       } else if (!token.email) {
         token.email = demoEmail;
       }
+
+      token.isAdmin = token.email === process.env.ADMIN_EMAIL;
 
       return token;
     },

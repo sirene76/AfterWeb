@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import connectDB from "@/lib/db";
 import { deployToCloudflare } from "@/lib/deployToCloudflare";
+import Log from "@/models/Log";
 import Website from "@/models/Website";
 
 export async function POST(req: Request, context: { params: Promise<{ id: string }> }) {
@@ -30,9 +31,37 @@ export async function POST(req: Request, context: { params: Promise<{ id: string
     site.deployUrl = deployUrl;
     site.status = "deployed";
     await site.save();
+
+    try {
+      await Log.create({
+        event: "deploy",
+        status: "success",
+        message: `Manual deploy completed for ${site.name}`,
+        accountId: site.accountId ?? undefined,
+        websiteId: site._id,
+        metadata: { deployUrl },
+      });
+    } catch (logError) {
+      console.error("Failed to log manual deploy success", logError);
+    }
+
     return NextResponse.json({ deployUrl });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Cloudflare deploy failed";
+
+    try {
+      await Log.create({
+        event: "deploy",
+        status: "failure",
+        message: `Manual deploy failed for ${site.name}`,
+        accountId: site.accountId ?? undefined,
+        websiteId: site._id,
+        metadata: { error: message },
+      });
+    } catch (logError) {
+      console.error("Failed to log manual deploy error", logError);
+    }
+
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
