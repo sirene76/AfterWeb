@@ -1,6 +1,6 @@
 import { Schema, model, models, type Document, type Types } from "mongoose";
 
-export interface WebsiteReportSeoIssues {
+export interface ISeoIssueList {
   missingTitle: string[];
   missingDescription: string[];
   missingOrMultipleH1: string[];
@@ -8,30 +8,25 @@ export interface WebsiteReportSeoIssues {
   missingAlt: string[];
 }
 
-export interface WebsiteReportPerformanceIssue {
-  path: string;
-  sizeKb: number;
+export interface IPerformanceIssueList {
+  largeImages: { path: string; sizeKb: number }[];
+  largeAssets: { path: string; sizeKb: number }[];
 }
 
-export interface WebsiteReportPerformanceIssues {
-  largeImages: WebsiteReportPerformanceIssue[];
-  largeAssets: WebsiteReportPerformanceIssue[];
-}
-
-export interface WebsiteReportDocument extends Document {
+export interface IWebsiteReport extends Document {
   website: Types.ObjectId;
+  createdAt: Date;
   pageCount: number;
   assetCount: number;
   imageCount: number;
   seoScore: number;
   performanceScore: number;
-  seoIssues: WebsiteReportSeoIssues;
-  performanceIssues: WebsiteReportPerformanceIssues;
+  seoIssues: ISeoIssueList;
+  performanceIssues: IPerformanceIssueList;
   summary?: string;
-  createdAt: Date;
 }
 
-const WebsiteReportSchema = new Schema<WebsiteReportDocument>(
+const WebsiteReportSchema = new Schema<IWebsiteReport>(
   {
     website: { type: Schema.Types.ObjectId, ref: "Website", required: true, index: true },
     pageCount: { type: Number, required: true },
@@ -76,6 +71,6 @@ const WebsiteReportSchema = new Schema<WebsiteReportDocument>(
 WebsiteReportSchema.index({ website: 1, createdAt: -1 });
 
 const WebsiteReport =
-  models.WebsiteReport || model<WebsiteReportDocument>("WebsiteReport", WebsiteReportSchema);
+  models.WebsiteReport || model<IWebsiteReport>("WebsiteReport", WebsiteReportSchema);
 
 export default WebsiteReport;

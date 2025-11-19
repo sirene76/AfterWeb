@@ -1,238 +1,270 @@
-import fs from "fs/promises";
-import path from "path";
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 
-import { analyzeSite } from "@/lib/analyzeSite";
-import { ensureDefaultAccount } from "@/lib/account";
-import { getSessionUserEmail } from "@/lib/auth";
+import { auth } from "@/lib/auth";
 import connectDB from "@/lib/db";
 import { deployToCloudflare } from "@/lib/deployToCloudflare";
-import {
-  type ExtractZipResult,
-  type ExtractedFiles,
-  extractZip,
-} from "@/lib/extractZip";
+import { extractZip } from "@/lib/extractZip";
 import { generateWebsiteReport } from "@/lib/generateWebsiteReport";
-import AccountMember from "@/models/AccountMember";
+import { makeUploadError } from "@/lib/uploadErrors";
+import Account from "@/models/Account";
 import Log from "@/models/Log";
 import Website from "@/models/Website";
+import type { ExtractResult } from "@/lib/extractZip";
+import type { IWebsiteReport } from "@/models/WebsiteReport";
 
-const TEXT_FILE_EXTENSIONS = new Set([
-  ".html",
-  ".htm",
-  ".css",
-  ".js",
-  ".json",
-  ".txt",
-  ".svg",
-  ".xml",
-  ".md",
-]);
-
-async function buildExtractedFilesForAnalysis(
-  extractResult: ExtractZipResult,
-): Promise<ExtractedFiles> {
-  const files: ExtractedFiles = {};
-
-  for (const file of extractResult.files) {
-    const absolutePath = path.join(extractResult.rootDir, file.path);
-    try {
-      const buffer = await fs.readFile(absolutePath);
-      const extension = path.extname(file.path).toLowerCase();
-      if (TEXT_FILE_EXTENSIONS.has(extension)) {
-        files[file.path] = {
-          data: buffer.toString("utf-8"),
-          encoding: "utf-8",
-          mimeType: file.contentType,
-        };
-      } else {
-        files[file.path] = {
-          data: buffer.toString("base64"),
-          encoding: "base64",
-          mimeType: file.contentType,
-        };
-      }
-    } catch (error) {
-      console.warn(`Failed to include extracted file ${file.path} for analysis`, error);
-    }
-  }
-
-  return files;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 export async function POST(req: Request) {
   try {
-    const contentType = req.headers.get("content-type") || "";
-    if (!contentType.includes("application/json")) {
-      return NextResponse.json({ error: "Unsupported content type" }, { status: 415 });
-    }
-
-    const body = await req.json();
-    const fileUrl = typeof body.fileUrl === "string" ? body.fileUrl : null;
-
-    const sessionEmail = await getSessionUserEmail();
-    const fallbackEmail = typeof body.userEmail === "string" && body.userEmail ? body.userEmail : null;
-    const userEmail = sessionEmail ?? fallbackEmail;
-
-    if (!userEmail) {
-      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
-    }
-
-    let accountId: string | undefined = typeof body.accountId === "string" ? body.accountId : undefined;
-
-    if (!fileUrl) {
-      return NextResponse.json({ error: "Missing file URL" }, { status: 400 });
-    }
-
-    let uploadedFileName = "uploaded-site.zip";
-    try {
-      const parsedUrl = new URL(fileUrl);
-      const parts = parsedUrl.pathname.split("/").filter(Boolean);
-      if (parts.length > 0) {
-        uploadedFileName = parts[parts.length - 1];
-      }
-    } catch {
-      uploadedFileName = "uploaded-site.zip";
-    }
-
     await connectDB();
 
-    if (accountId) {
-      if (!Types.ObjectId.isValid(accountId)) {
-        return NextResponse.json({ error: "Invalid workspace" }, { status: 400 });
-      }
-      const membership = await AccountMember.findOne({ accountId, userEmail });
-      if (!membership) {
-        return NextResponse.json({ error: "Workspace access denied" }, { status: 403 });
-      }
-    } else {
-      const account = await ensureDefaultAccount(userEmail);
-      accountId = account._id.toString();
+    const session = await auth();
+    const userEmail = session?.user?.email;
+    if (!userEmail) {
+      return NextResponse.json(
+        makeUploadError("INVALID_BODY", "You must be signed in to upload."),
+        { status: 401 },
+      );
     }
 
-    const resolvedAccountId = accountId!;
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        makeUploadError("INVALID_BODY", "Request body must be valid JSON."),
+        { status: 400 },
+      );
+    }
 
-    const site = await Website.create({
-      name: uploadedFileName.replace(/\.zip$/i, "") || "Uploaded Site",
+    if (!isRecord(body)) {
+      return NextResponse.json(
+        makeUploadError("INVALID_BODY", "Request body must be an object."),
+        { status: 400 },
+      );
+    }
+
+    const fileUrl = typeof body.fileUrl === "string" ? body.fileUrl.trim() : "";
+    const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
+    const siteName =
+      typeof body.name === "string" && body.name.trim() ? body.name.trim() : "Untitled site";
+
+    if (!fileUrl) {
+      return NextResponse.json(
+        makeUploadError("MISSING_FILE_URL", "An uploaded file URL is required."),
+        { status: 400 },
+      );
+    }
+
+    if (!accountId) {
+      return NextResponse.json(
+        makeUploadError("MISSING_WORKSPACE_ID", "A workspaceId must be provided."),
+        { status: 400 },
+      );
+    }
+
+    if (!Types.ObjectId.isValid(accountId)) {
+      return NextResponse.json(
+        makeUploadError("MISSING_WORKSPACE_ID", "Workspace not found."),
+        { status: 404 },
+      );
+    }
+
+    const account = await Account.findById(accountId);
+    if (!account) {
+      return NextResponse.json(
+        makeUploadError("MISSING_WORKSPACE_ID", "Workspace not found."),
+        { status: 404 },
+      );
+    }
+
+    const website = await Website.create({
+      name: siteName,
       userEmail,
-      accountId: resolvedAccountId,
-      status: "uploaded",
-      archiveUrl: fileUrl ?? undefined,
-      zipUrl: fileUrl ?? undefined,
+      ownerEmail: userEmail,
+      account: account._id,
+      accountId: account._id,
+      status: "uploading",
+      archiveUrl: fileUrl,
+      zipUrl: fileUrl,
+      files: [],
       meta: {
         pages: 0,
         scripts: 0,
         seoScore: 0,
-        title: "",
+        title: siteName,
         description: "",
         faviconUrl: "",
       },
     });
 
-    const extractResult = await extractZip({ websiteId: site._id.toString(), zipUrl: fileUrl });
-    const extractedFiles = await buildExtractedFilesForAnalysis(extractResult);
-    const analysis = await analyzeSite(extractedFiles);
+    await Log.create({
+      event: "upload",
+      status: "info",
+      message: "Upload started.",
+      accountId: account._id,
+      websiteId: website._id,
+      metadata: { fileUrl },
+    });
 
-    const report = await generateWebsiteReport({ websiteId: site._id.toString(), extractResult });
+    let extractResult: ExtractResult;
+    try {
+      extractResult = await extractZip(fileUrl, website._id.toString());
+    } catch (error) {
+      website.status = "error";
+      website.errorReason = "EXTRACTION_FAILED";
+      await website.save();
 
-    site.name = analysis.title || site.name;
-    site.status = "analyzed";
-    site.meta = {
-      pages: analysis.pageCount,
-      scripts: analysis.scriptCount,
-      seoScore: report.seoScore,
-      title: analysis.title,
-      description: analysis.description,
-      faviconUrl: analysis.faviconDataUrl ?? "",
-    };
-    site.files = extractResult.files;
-    await site.save();
+      await Log.create({
+        event: "upload",
+        status: "failure",
+        message: "Failed to extract zip.",
+        accountId: account._id,
+        websiteId: website._id,
+        metadata: { error: error instanceof Error ? error.message : error },
+      });
+
+      return NextResponse.json(
+        makeUploadError("EXTRACTION_FAILED", "Could not extract the uploaded zip file."),
+        { status: 400 },
+      );
+    }
+
+    const hasIndexHtml = extractResult.files.some((file) => {
+      const normalized = file.path.toLowerCase();
+      return normalized === "index.html" || normalized.endsWith("/index.html");
+    });
+
+    if (!hasIndexHtml) {
+      website.status = "error";
+      website.errorReason = "MISSING_INDEX_HTML";
+      await website.save();
+
+      await Log.create({
+        event: "upload",
+        status: "failure",
+        message: "Zip is missing index.html.",
+        accountId: account._id,
+        websiteId: website._id,
+      });
+
+      return NextResponse.json(
+        makeUploadError(
+          "MISSING_INDEX_HTML",
+          "The uploaded site must contain an index.html file in the root or a folder.",
+        ),
+        { status: 400 },
+      );
+    }
+
+    website.files = extractResult.files.map((file) => ({
+      path: file.path,
+      sizeBytes: file.sizeBytes,
+      contentType: file.contentType,
+    }));
+    website.status = "analyzing";
+    website.errorReason = undefined;
+    await website.save();
+
+    let report: IWebsiteReport;
+    try {
+      report = await generateWebsiteReport({
+        websiteId: website._id.toString(),
+        extractResult,
+      });
+    } catch (error) {
+      website.status = "error";
+      website.errorReason = "ANALYSIS_FAILED";
+      await website.save();
+
+      await Log.create({
+        event: "upload",
+        status: "failure",
+        message: "Failed to analyze site.",
+        accountId: account._id,
+        websiteId: website._id,
+        metadata: { error: error instanceof Error ? error.message : error },
+      });
+
+      return NextResponse.json(
+        makeUploadError("ANALYSIS_FAILED", "Failed to analyze the site HTML for SEO/performance."),
+        { status: 500 },
+      );
+    }
 
     await Log.create({
       event: "upload",
       status: "success",
-      message: `Upload processed for ${userEmail}`,
-      accountId: resolvedAccountId,
-      websiteId: site._id,
-      metadata: {
-        fileUrl,
-        meta: site.meta,
-        reportId: report._id,
-      },
+      message: "Analysis completed.",
+      accountId: account._id,
+      websiteId: website._id,
+      metadata: { reportId: report._id },
     });
 
-    const projectName = process.env.CLOUDFLARE_PROJECT_NAME;
-    const token = process.env.CLOUDFLARE_API_TOKEN;
-    const cloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    website.meta = {
+      pages: report.pageCount,
+      scripts: website.meta?.scripts ?? 0,
+      seoScore: report.seoScore,
+      title: website.meta?.title ?? siteName,
+      description: website.meta?.description ?? "",
+      faviconUrl: website.meta?.faviconUrl ?? "",
+    };
+    await website.save();
 
-    if (projectName && token && accountId) {
-      try {
-        const deployUrl = await deployToCloudflare(
-          fileUrl,
-          projectName!,
-          token!,
-          cloudflareAccountId!,
-        );
-        if (deployUrl) {
-          site.deployUrl = deployUrl;
-        }
-        site.status = "deployed";
-        await site.save();
-
-        await Log.create({
-          event: "deploy",
-          status: "success",
-          message: `Automatic deploy completed for ${site.name}`,
-          accountId: resolvedAccountId,
-          websiteId: site._id,
-          metadata: { deployUrl },
-        });
-      } catch (deployError) {
-        console.error("Automatic deployment failed", deployError);
-        site.status = "failed";
-        await site.save();
-
-        await Log.create({
-          event: "deploy",
-          status: "failure",
-          message: `Automatic deploy failed for ${site.name}`,
-          accountId: resolvedAccountId,
-          websiteId: site._id,
-          metadata: {
-            error: deployError instanceof Error ? deployError.message : "Deployment failure",
-          },
-        });
-      }
-    }
-
-    return NextResponse.json({
-      siteId: site._id.toString(),
-      accountId: resolvedAccountId,
-      message: "Upload successful",
-      fileUrl,
-      meta: {
-        title: analysis.title,
-        description: analysis.description,
-        faviconUrl: analysis.faviconDataUrl ?? "",
-      },
-    });
-  } catch (error) {
-    console.error("Error handling upload", error);
     try {
-      await connectDB();
-      await Log.create({
-        event: "upload",
-        status: "failure",
-        message: error instanceof Error ? error.message : "Upload failed",
-        metadata: {
-          stack: error instanceof Error ? error.stack : undefined,
-        },
-      });
-    } catch (logError) {
-      console.error("Failed to log upload error", logError);
-    }
+      const deployResult = await deployToCloudflare(website, extractResult.rootDir);
+      website.status = "deployed";
+      website.errorReason = undefined;
+      website.previewUrl = deployResult.previewUrl ?? website.previewUrl;
+      website.deployUrl = deployResult.previewUrl ?? website.deployUrl;
+      await website.save();
 
-    return NextResponse.json({ error: "Failed to process upload" }, { status: 500 });
+      await Log.create({
+        event: "deploy",
+        status: "success",
+        message: "Deployment completed.",
+        accountId: account._id,
+        websiteId: website._id,
+        metadata: { deployResult },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        websiteId: website._id.toString(),
+        reportId: report._id.toString(),
+        deployOk: true,
+        previewUrl: website.previewUrl ?? null,
+      });
+    } catch (error) {
+      website.status = "ready";
+      website.errorReason = "DEPLOY_FAILED";
+      await website.save();
+
+      await Log.create({
+        event: "deploy",
+        status: "failure",
+        message: "Deployment failed.",
+        accountId: account._id,
+        websiteId: website._id,
+        metadata: { error: error instanceof Error ? error.message : error },
+      });
+
+      return NextResponse.json({
+        ok: true,
+        websiteId: website._id.toString(),
+        reportId: report._id.toString(),
+        deployOk: false,
+        deployError: "DEPLOY_FAILED",
+      });
+    }
+  } catch (error) {
+    console.error("Unexpected upload error", error);
+    return NextResponse.json(
+      makeUploadError("UNKNOWN", "Unexpected error in upload route."),
+      { status: 500 },
+    );
   }
 }
