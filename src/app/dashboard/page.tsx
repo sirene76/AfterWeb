@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { generateReactHelpers } from "@uploadthing/react";
@@ -914,13 +915,13 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
               const upgradeAllowed = billingAllowed && upgradeTargets.length > 0;
 
               return (
-                <motion.div
-                  key={siteId}
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.3, delay: index * 0.05 }}
-                  className="rounded-xl border border-gray-800 bg-gray-900 p-4 transition hover:border-blue-400"
-                >
+                <Link key={siteId} href={`/dashboard/websites/${siteId}`} className="block h-full">
+                  <motion.div
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: index * 0.05 }}
+                    className="h-full rounded-xl border border-gray-800 bg-gray-900 p-4 transition hover:border-blue-400 hover:bg-gray-900/80 cursor-pointer"
+                  >
                   <div className="mb-3 flex items-center gap-3">
                     <img
                       src={
@@ -952,7 +953,11 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                         return (
                           <button
                             key={targetPlan}
-                            onClick={() => void startCheckoutFlow(siteId, targetPlan)}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void startCheckoutFlow(siteId, targetPlan);
+                            }}
                             disabled={isLoading || !billingAllowed}
                             className="mt-1 rounded-lg bg-amber-500 px-3 py-1 text-sm font-medium text-gray-900 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:bg-amber-700/60 disabled:text-gray-400"
                           >
@@ -964,10 +969,13 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                   )}
                   <p className="mt-1 text-sm text-gray-400">SEO Score: {site.meta?.seoScore ?? "N/A"}</p>
                   {site.deployUrl && (
-                    <a
-                      href={site.deployUrl}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        window.open(site.deployUrl, "_blank", "noopener,noreferrer");
+                      }}
                       className="mt-3 inline-flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
                     >
                       View Site
@@ -985,7 +993,7 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                           d="m14.25 6.75 3 3m0 0-3 3m3-3h-7.5a4.5 4.5 0 0 0-4.5 4.5V18"
                         />
                       </svg>
-                    </a>
+                    </button>
                   )}
                   <div className="mt-3 space-y-1">
                     {renderMaintenanceStatus("Uptime", site.maintenance?.uptime)}
@@ -998,7 +1006,9 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                     </p>
                     <div className="flex flex-wrap items-center gap-2">
                       <button
-                        onClick={async () => {
+                        onClick={async (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
                           if (!canManageWorkspace) {
                             showMessage("⚠️ You have view-only access to this workspace.", "warning");
                             return;
@@ -1034,7 +1044,11 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                         Run SEO Audit
                       </button>
                       <button
-                        onClick={() => void handleRedeploy(siteId)}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          void handleRedeploy(siteId);
+                        }}
                         disabled={!canManageWorkspace}
                         className={`rounded-lg px-3 py-1 text-sm transition ${
                           canManageWorkspace
@@ -1045,7 +1059,9 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                         Redeploy
                       </button>
                       <button
-                        onClick={() => {
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
                           if (!canManageWorkspace) {
                             showMessage("⚠️ You have view-only access to this workspace.", "warning");
                             return;
@@ -1066,7 +1082,9 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                         Backup Now
                       </button>
                       <button
-                        onClick={() => {
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
                           if (!canManageWorkspace) {
                             showMessage("⚠️ You have view-only access to this workspace.", "warning");
                             return;
@@ -1089,6 +1107,7 @@ const { startUpload, isUploading: uploadThingUploading, routeConfig } = useUploa
                     </div>
                   </div>
                 </motion.div>
+                </Link>
               );
             })}
           </div>
