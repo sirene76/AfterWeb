@@ -1,5 +1,11 @@
 import { Schema, model, models, type Document, type Types } from "mongoose";
 
+export interface WebsiteFileEntry {
+  path: string;
+  sizeBytes: number;
+  contentType?: string;
+}
+
 export interface WebsiteMeta {
   pages: number;
   scripts: number;
@@ -25,6 +31,7 @@ export interface WebsiteDocument extends Document {
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
   meta: WebsiteMeta;
+  files: WebsiteFileEntry[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -61,6 +68,16 @@ const WebsiteSchema = new Schema<WebsiteDocument>(
       title: { type: String, default: "" },
       description: { type: String, default: "" },
       faviconUrl: { type: String, default: "" },
+    },
+    files: {
+      type: [
+        {
+          path: { type: String, required: true },
+          sizeBytes: { type: Number, required: true },
+          contentType: { type: String },
+        },
+      ],
+      default: [],
     },
   },
   {

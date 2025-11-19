@@ -1,4 +1,5 @@
 import AdmZip from "adm-zip";
+import fs from "fs/promises";
 import path from "path";
 
 export interface ExtractedFile {
@@ -8,18 +9,6 @@ export interface ExtractedFile {
 }
 
 export type ExtractedFiles = Record<string, ExtractedFile>;
-
-const TEXT_EXTENSIONS = new Set([
-  ".html",
-  ".htm",
-  ".css",
-  ".js",
-  ".json",
-  ".txt",
-  ".svg",
-  ".xml",
-  ".md",
-]);
 
 function getMimeType(extension: string): string | undefined {
   switch (extension) {
@@ -52,34 +41,80 @@ function getMimeType(extension: string): string | undefined {
   }
 }
 
-export function extractZip(buffer: Buffer): ExtractedFiles {
+export interface ExtractedFileSummary {
+  path: string;
+  sizeBytes: number;
+  contentType?: string;
+}
+
+export interface ExtractZipResult {
+  rootDir: string;
+  files: ExtractedFileSummary[];
+}
+
+export interface ExtractZipParams {
+  websiteId: string;
+  zipUrl: string;
+}
+
+const EXTRACT_BASE_DIR = path.join(process.cwd(), "uploads", "extracted");
+
+async function prepareExtractionDir(dir: string): Promise<void> {
+  await fs.mkdir(EXTRACT_BASE_DIR, { recursive: true });
+  await fs.rm(dir, { recursive: true, force: true });
+  await fs.mkdir(dir, { recursive: true });
+}
+
+export async function extractZip({ websiteId, zipUrl }: ExtractZipParams): Promise<ExtractZipResult> {
+  if (!zipUrl) {
+    throw new Error("Missing zip URL for extraction");
+  }
+
+  const response = await fetch(zipUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download zip: ${response.status}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
   const zip = new AdmZip(buffer);
-  const files: ExtractedFiles = {};
+  const rootDir = path.join(EXTRACT_BASE_DIR, websiteId);
+
+  await prepareExtractionDir(rootDir);
+
+  const files: ExtractedFileSummary[] = [];
 
   for (const entry of zip.getEntries()) {
     if (entry.isDirectory) {
       continue;
     }
 
-    const entryName = entry.entryName;
-    const extension = path.extname(entryName).toLowerCase();
-    const data = entry.getData();
-    const mimeType = getMimeType(extension);
-
-    if (TEXT_EXTENSIONS.has(extension)) {
-      files[entryName] = {
-        data: data.toString("utf-8"),
-        encoding: "utf-8",
-        mimeType,
-      };
-    } else {
-      files[entryName] = {
-        data: data.toString("base64"),
-        encoding: "base64",
-        mimeType,
-      };
+    const originalName = entry.entryName.replace(/\\/g, "/");
+    const trimmedName = originalName.replace(/^\/+/, "");
+    if (!trimmedName) {
+      continue;
     }
+
+    const normalizedRelative = path.normalize(trimmedName);
+    const resolvedPath = path.resolve(rootDir, normalizedRelative);
+    const relativeFromRoot = path.relative(rootDir, resolvedPath);
+
+    if (relativeFromRoot.startsWith("..") || path.isAbsolute(relativeFromRoot)) {
+      continue;
+    }
+
+    const data = entry.getData();
+    await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+    await fs.writeFile(resolvedPath, data);
+
+    const extension = path.extname(trimmedName).toLowerCase();
+    const posixPath = normalizedRelative.split(path.sep).join("/");
+
+    files.push({
+      path: posixPath,
+      sizeBytes: data.length,
+      contentType: getMimeType(extension),
+    });
   }
 
-  return files;
+  return { rootDir, files };
 }

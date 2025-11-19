@@ -1,3 +1,5 @@
+import fs from "fs/promises";
+import path from "path";
 import { NextResponse } from "next/server";
 import { Types } from "mongoose";
 
@@ -6,10 +8,58 @@ import { ensureDefaultAccount } from "@/lib/account";
 import { getSessionUserEmail } from "@/lib/auth";
 import connectDB from "@/lib/db";
 import { deployToCloudflare } from "@/lib/deployToCloudflare";
-import { extractZip } from "@/lib/extractZip";
+import {
+  type ExtractZipResult,
+  type ExtractedFiles,
+  extractZip,
+} from "@/lib/extractZip";
+import { generateWebsiteReport } from "@/lib/generateWebsiteReport";
 import AccountMember from "@/models/AccountMember";
 import Log from "@/models/Log";
 import Website from "@/models/Website";
+
+const TEXT_FILE_EXTENSIONS = new Set([
+  ".html",
+  ".htm",
+  ".css",
+  ".js",
+  ".json",
+  ".txt",
+  ".svg",
+  ".xml",
+  ".md",
+]);
+
+async function buildExtractedFilesForAnalysis(
+  extractResult: ExtractZipResult,
+): Promise<ExtractedFiles> {
+  const files: ExtractedFiles = {};
+
+  for (const file of extractResult.files) {
+    const absolutePath = path.join(extractResult.rootDir, file.path);
+    try {
+      const buffer = await fs.readFile(absolutePath);
+      const extension = path.extname(file.path).toLowerCase();
+      if (TEXT_FILE_EXTENSIONS.has(extension)) {
+        files[file.path] = {
+          data: buffer.toString("utf-8"),
+          encoding: "utf-8",
+          mimeType: file.contentType,
+        };
+      } else {
+        files[file.path] = {
+          data: buffer.toString("base64"),
+          encoding: "base64",
+          mimeType: file.contentType,
+        };
+      }
+    } catch (error) {
+      console.warn(`Failed to include extracted file ${file.path} for analysis`, error);
+    }
+  }
+
+  return files;
+}
 
 export async function POST(req: Request) {
   try {
@@ -35,14 +85,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing file URL" }, { status: 400 });
     }
 
-    const response = await fetch(fileUrl);
-    if (!response.ok) {
-      return NextResponse.json({ error: "Failed to download uploaded file" }, { status: 502 });
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
     let uploadedFileName = "uploaded-site.zip";
     try {
       const parsedUrl = new URL(fileUrl);
@@ -53,9 +95,6 @@ export async function POST(req: Request) {
     } catch {
       uploadedFileName = "uploaded-site.zip";
     }
-
-    const extracted = extractZip(buffer);
-    const analysis = await analyzeSite(extracted);
 
     await connectDB();
 
@@ -75,21 +114,40 @@ export async function POST(req: Request) {
     const resolvedAccountId = accountId!;
 
     const site = await Website.create({
-      name: analysis.title || uploadedFileName.replace(/\.zip$/i, "") || "Uploaded Site",
+      name: uploadedFileName.replace(/\.zip$/i, "") || "Uploaded Site",
       userEmail,
       accountId: resolvedAccountId,
-      status: "analyzed",
+      status: "uploaded",
       archiveUrl: fileUrl ?? undefined,
       zipUrl: fileUrl ?? undefined,
       meta: {
-        pages: analysis.pageCount,
-        scripts: analysis.scriptCount,
-        seoScore: analysis.seoScore,
-        title: analysis.title,
-        description: analysis.description,
-        faviconUrl: analysis.faviconDataUrl ?? "",
+        pages: 0,
+        scripts: 0,
+        seoScore: 0,
+        title: "",
+        description: "",
+        faviconUrl: "",
       },
     });
+
+    const extractResult = await extractZip({ websiteId: site._id.toString(), zipUrl: fileUrl });
+    const extractedFiles = await buildExtractedFilesForAnalysis(extractResult);
+    const analysis = await analyzeSite(extractedFiles);
+
+    const report = await generateWebsiteReport({ websiteId: site._id.toString(), extractResult });
+
+    site.name = analysis.title || site.name;
+    site.status = "analyzed";
+    site.meta = {
+      pages: analysis.pageCount,
+      scripts: analysis.scriptCount,
+      seoScore: report.seoScore,
+      title: analysis.title,
+      description: analysis.description,
+      faviconUrl: analysis.faviconDataUrl ?? "",
+    };
+    site.files = extractResult.files;
+    await site.save();
 
     await Log.create({
       event: "upload",
@@ -100,6 +158,7 @@ export async function POST(req: Request) {
       metadata: {
         fileUrl,
         meta: site.meta,
+        reportId: report._id,
       },
     });
 
@@ -141,8 +200,7 @@ export async function POST(req: Request) {
           accountId: resolvedAccountId,
           websiteId: site._id,
           metadata: {
-            error:
-              deployError instanceof Error ? deployError.message : "Deployment failure",
+            error: deployError instanceof Error ? deployError.message : "Deployment failure",
           },
         });
       }
