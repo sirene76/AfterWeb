@@ -1,17 +1,34 @@
 import AdmZip from "adm-zip";
 import fs from "fs/promises";
+import os from "os";
 import path from "path";
 
-export interface ExtractedFile {
-  data: string;
-  encoding: "utf-8" | "base64";
-  mimeType?: string;
+export type ExtractedFile = {
+  path: string;
+  sizeBytes: number;
+  contentType: string | null;
+};
+
+export type ExtractResult = {
+  rootDir: string;
+  files: ExtractedFile[];
+};
+
+const EXTRACT_BASE_DIR = path.join(process.cwd(), "uploads", "extracted");
+
+async function ensureDir(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
 }
 
-export type ExtractedFiles = Record<string, ExtractedFile>;
+async function prepareExtractionDir(rootDir: string): Promise<void> {
+  await ensureDir(EXTRACT_BASE_DIR);
+  await fs.rm(rootDir, { recursive: true, force: true });
+  await fs.mkdir(rootDir, { recursive: true });
+}
 
-function getMimeType(extension: string): string | undefined {
-  switch (extension) {
+function detectContentType(filePath: string): string | null {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
     case ".html":
     case ".htm":
       return "text/html";
@@ -36,85 +53,83 @@ function getMimeType(extension: string): string | undefined {
       return "image/x-icon";
     case ".xml":
       return "application/xml";
+    case ".txt":
+      return "text/plain";
     default:
-      return undefined;
+      return null;
   }
 }
 
-export interface ExtractedFileSummary {
-  path: string;
-  sizeBytes: number;
-  contentType?: string;
-}
+async function walkExtractedFiles(currentDir: string, rootDir: string): Promise<ExtractedFile[]> {
+  const entries = (await fs.readdir(currentDir, { withFileTypes: true })).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  const files: ExtractedFile[] = [];
 
-export interface ExtractZipResult {
-  rootDir: string;
-  files: ExtractedFileSummary[];
-}
-
-export interface ExtractZipParams {
-  websiteId: string;
-  zipUrl: string;
-}
-
-const EXTRACT_BASE_DIR = path.join(process.cwd(), "uploads", "extracted");
-
-async function prepareExtractionDir(dir: string): Promise<void> {
-  await fs.mkdir(EXTRACT_BASE_DIR, { recursive: true });
-  await fs.rm(dir, { recursive: true, force: true });
-  await fs.mkdir(dir, { recursive: true });
-}
-
-export async function extractZip({ websiteId, zipUrl }: ExtractZipParams): Promise<ExtractZipResult> {
-  if (!zipUrl) {
-    throw new Error("Missing zip URL for extraction");
+  for (const entry of entries) {
+    const fullPath = path.join(currentDir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await walkExtractedFiles(fullPath, rootDir)));
+    } else if (entry.isFile()) {
+      const stats = await fs.stat(fullPath);
+      const relativePath = path.relative(rootDir, fullPath).split(path.sep).join("/");
+      files.push({
+        path: relativePath,
+        sizeBytes: stats.size,
+        contentType: detectContentType(fullPath),
+      });
+    }
   }
 
-  const response = await fetch(zipUrl);
+  return files;
+}
+
+export async function extractZip(fileUrl: string, websiteId: string): Promise<ExtractResult> {
+  if (!fileUrl) {
+    throw new Error("Missing file URL");
+  }
+
+  const response = await fetch(fileUrl);
   if (!response.ok) {
     throw new Error(`Failed to download zip: ${response.status}`);
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
-  const zip = new AdmZip(buffer);
-  const rootDir = path.join(EXTRACT_BASE_DIR, websiteId);
+  const arrayBuffer = await response.arrayBuffer();
+  const tempZipPath = path.join(os.tmpdir(), `afterweb-${websiteId}-${Date.now()}.zip`);
+  await fs.writeFile(tempZipPath, Buffer.from(arrayBuffer));
 
+  const rootDir = path.join(EXTRACT_BASE_DIR, websiteId);
   await prepareExtractionDir(rootDir);
 
-  const files: ExtractedFileSummary[] = [];
+  try {
+    const zip = new AdmZip(tempZipPath);
+    const entries = zip.getEntries();
 
-  for (const entry of zip.getEntries()) {
-    if (entry.isDirectory) {
-      continue;
+    for (const entry of entries) {
+      if (entry.isDirectory) {
+        continue;
+      }
+
+      const originalName = entry.entryName.replace(/\\/g, "/");
+      const trimmedName = originalName.replace(/^\/+/, "");
+      if (!trimmedName) {
+        continue;
+      }
+
+      const normalizedPath = path.normalize(trimmedName);
+      const resolvedPath = path.resolve(rootDir, normalizedPath);
+      const relative = path.relative(rootDir, resolvedPath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) {
+        continue;
+      }
+
+      await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
+      await fs.writeFile(resolvedPath, entry.getData());
     }
-
-    const originalName = entry.entryName.replace(/\\/g, "/");
-    const trimmedName = originalName.replace(/^\/+/, "");
-    if (!trimmedName) {
-      continue;
-    }
-
-    const normalizedRelative = path.normalize(trimmedName);
-    const resolvedPath = path.resolve(rootDir, normalizedRelative);
-    const relativeFromRoot = path.relative(rootDir, resolvedPath);
-
-    if (relativeFromRoot.startsWith("..") || path.isAbsolute(relativeFromRoot)) {
-      continue;
-    }
-
-    const data = entry.getData();
-    await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
-    await fs.writeFile(resolvedPath, data);
-
-    const extension = path.extname(trimmedName).toLowerCase();
-    const posixPath = normalizedRelative.split(path.sep).join("/");
-
-    files.push({
-      path: posixPath,
-      sizeBytes: data.length,
-      contentType: getMimeType(extension),
-    });
+  } finally {
+    await fs.rm(tempZipPath, { force: true });
   }
 
+  const files = await walkExtractedFiles(rootDir, rootDir);
   return { rootDir, files };
 }

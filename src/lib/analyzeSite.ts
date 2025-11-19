@@ -1,6 +1,12 @@
 import { load } from "cheerio";
 
-import type { ExtractedFile, ExtractedFiles } from "./extractZip";
+export interface ExtractedFile {
+  data: string;
+  encoding: "utf-8" | "base64";
+  mimeType?: string;
+}
+
+export type ExtractedFiles = Record<string, ExtractedFile>;
 
 export interface SiteAnalysis {
   title: string;

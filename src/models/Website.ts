@@ -3,7 +3,7 @@ import { Schema, model, models, type Document, type Types } from "mongoose";
 export interface WebsiteFileEntry {
   path: string;
   sizeBytes: number;
-  contentType?: string;
+  contentType?: string | null;
 }
 
 export interface WebsiteMeta {
@@ -17,15 +17,29 @@ export interface WebsiteMeta {
 
 export type WebsitePlan = "basic" | "standard" | "pro";
 export type WebsiteBillingStatus = "inactive" | "active" | "past_due" | "canceled";
+export type WebsiteStatus =
+  | "uploaded"
+  | "analyzed"
+  | "deployed"
+  | "failed"
+  | "uploading"
+  | "analyzing"
+  | "ready"
+  | "deploying"
+  | "error";
 
 export interface WebsiteDocument extends Document {
   name: string;
   userEmail: string;
+  ownerEmail?: string;
+  account?: Types.ObjectId;
   accountId?: Types.ObjectId;
-  status: "uploaded" | "analyzed" | "deployed" | "failed";
+  status: WebsiteStatus;
   deployUrl?: string;
+  previewUrl?: string;
   archiveUrl?: string;
   zipUrl?: string;
+  errorReason?: string;
   plan: WebsitePlan;
   billingStatus: WebsiteBillingStatus;
   stripeCustomerId?: string;
@@ -40,15 +54,29 @@ const WebsiteSchema = new Schema<WebsiteDocument>(
   {
     name: { type: String, required: true },
     userEmail: { type: String, required: true, index: true },
+    ownerEmail: { type: String, index: true },
+    account: { type: Schema.Types.ObjectId, ref: "Account", index: true },
     accountId: { type: Schema.Types.ObjectId, ref: "Account", index: true },
     status: {
       type: String,
-      enum: ["uploaded", "analyzed", "deployed", "failed"],
-      default: "uploaded",
+      enum: [
+        "uploaded",
+        "analyzed",
+        "deployed",
+        "failed",
+        "uploading",
+        "analyzing",
+        "ready",
+        "deploying",
+        "error",
+      ],
+      default: "uploading",
     },
     deployUrl: { type: String },
+    previewUrl: { type: String },
     archiveUrl: { type: String },
     zipUrl: { type: String },
+    errorReason: { type: String },
     plan: {
       type: String,
       enum: ["basic", "standard", "pro"],
