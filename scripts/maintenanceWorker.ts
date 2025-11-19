@@ -1,11 +1,35 @@
 import "dotenv/config";
-import connectDB from "@/lib/db";
-import Website from "@/models/Website";
-import MaintenanceLog from "@/models/MaintenanceLog";
+import fs from "fs/promises";
+import path from "path";
+
 import { backupToR2 } from "@/lib/backupToR2";
 import { generateSeoRecommendations } from "@/lib/aiSeoHelper";
+import connectDB from "@/lib/db";
+import { extractZip } from "@/lib/extractZip";
 import { runSeoAgent } from "@/lib/seoAgent";
 import { sendWeeklyReport } from "@/lib/mailer";
+import MaintenanceLog from "@/models/MaintenanceLog";
+import Website from "@/models/Website";
+
+const EXTRACT_BASE_DIR = path.join(process.cwd(), "uploads", "extracted");
+
+async function resolveSourceDir(websiteId: string, zipUrl?: string | null) {
+  const existingDir = path.join(EXTRACT_BASE_DIR, websiteId);
+  try {
+    const stats = await fs.stat(existingDir);
+    if (stats.isDirectory()) {
+      return existingDir;
+    }
+  } catch {
+    // continue to extraction
+  }
+
+  if (!zipUrl) {
+    throw new Error("Website archive missing");
+  }
+  const extraction = await extractZip(zipUrl, websiteId);
+  return extraction.rootDir;
+}
 
 async function run() {
   await connectDB();
@@ -44,12 +68,17 @@ async function run() {
       const lastBackup = await MaintenanceLog.findOne({ websiteId: site._id, type: "backup" }).sort({ createdAt: -1 });
       if (!lastBackup || Date.now() - lastBackup.createdAt.getTime() > 7 * 24 * 3600 * 1000) {
         try {
-          const backupUrl = await backupToR2(site.deployUrl, site._id.toString());
+          const sourceDir = await resolveSourceDir(site._id.toString(), site.zipUrl ?? undefined);
+          const backupResult = await backupToR2(site._id.toString(), sourceDir);
+          site.lastBackupAt = new Date();
+          site.lastBackupKey = backupResult.objectKey;
+          site.lastBackupUrl = null;
+          await site.save();
           await MaintenanceLog.create({
             websiteId: site._id,
             type: "backup",
             status: "success",
-            details: { backupUrl },
+            details: { objectKey: backupResult.objectKey, sizeBytes: backupResult.sizeBytes },
           });
         } catch (error) {
           await MaintenanceLog.create({

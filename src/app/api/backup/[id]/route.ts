@@ -1,58 +1,142 @@
+import fs from "fs/promises";
+import path from "path";
 import { NextResponse } from "next/server";
+import { Types } from "mongoose";
 
-import { backupToR2 } from "@/lib/backupToR2";
+import { auth } from "@/lib/auth";
+import { backupToR2, getBackupDownloadUrl } from "@/lib/backupToR2";
 import connectDB from "@/lib/db";
+import { extractZip } from "@/lib/extractZip";
+import Log from "@/models/Log";
 import MaintenanceLog from "@/models/MaintenanceLog";
-import Website from "@/models/Website";
+import Website, { type WebsiteDocument } from "@/models/Website";
 
-export async function POST(
-  request: Request,
-  context: { params: Promise<{ id: string }> }
-) {
-  const { id } = await context.params; // ✅ await params before use
+const EXTRACT_BASE_DIR = path.join(process.cwd(), "uploads", "extracted");
+
+async function resolveSourceDir(website: WebsiteDocument): Promise<string> {
+  const websiteId = website._id.toString();
+  const existingDir = path.join(EXTRACT_BASE_DIR, websiteId);
+  try {
+    const stats = await fs.stat(existingDir);
+    if (stats.isDirectory()) {
+      return existingDir;
+    }
+  } catch {
+    // fallthrough to re-extraction
+  }
+
+  if (!website.zipUrl) {
+    throw new Error("NO_SOURCE_ARCHIVE");
+  }
+
+  const extraction = await extractZip(website.zipUrl, websiteId);
+  return extraction.rootDir;
+}
+
+export async function POST(_request: Request, context: { params: Promise<{ id: string }> }) {
+  const { id } = await context.params;
 
   try {
     await connectDB();
+    const session = await auth();
+    const sessionEmail = session?.user?.email;
 
-    const website = await Website.findById(id);
-    if (!website) {
-      return NextResponse.json({ error: "Website not found" }, { status: 404 });
-    }
-
-    if (!website.deployUrl) {
+    if (!sessionEmail) {
       return NextResponse.json(
-        { error: "Website has not been deployed yet" },
-        { status: 400 }
+        { ok: false, error: "UNAUTHORIZED", message: "You must be signed in." },
+        { status: 401 },
       );
     }
 
-    const backupUrl = await backupToR2(website.deployUrl, website._id.toString());
+    if (!id || !Types.ObjectId.isValid(id)) {
+      return NextResponse.json(
+        { ok: false, error: "INVALID_ID", message: "Invalid website id." },
+        { status: 400 },
+      );
+    }
 
-    await MaintenanceLog.create({
-      websiteId: website._id,
-      type: "backup",
-      status: "success",
-      details: { backupUrl },
+    const website = await Website.findById(id);
+    if (!website) {
+      return NextResponse.json(
+        { ok: false, error: "NOT_FOUND", message: "Website not found." },
+        { status: 404 },
+      );
+    }
+
+    const ownerEmail = website.ownerEmail ?? website.userEmail;
+    if (ownerEmail && ownerEmail !== sessionEmail) {
+      return NextResponse.json(
+        { ok: false, error: "FORBIDDEN", message: "You do not have access to this website." },
+        { status: 403 },
+      );
+    }
+
+    if (!website.deployUrl && !website.zipUrl) {
+      return NextResponse.json(
+        { ok: false, error: "NO_SOURCE", message: "Website does not have files available for backup." },
+        { status: 400 },
+      );
+    }
+
+    const sourceDir = await resolveSourceDir(website);
+    const backupResult = await backupToR2(website._id.toString(), sourceDir);
+
+    website.lastBackupAt = new Date();
+    website.lastBackupKey = backupResult.objectKey;
+    website.lastBackupUrl = null;
+    await website.save();
+
+    const downloadUrl = await getBackupDownloadUrl(backupResult.objectKey).catch(() => null);
+
+    await Promise.all([
+      MaintenanceLog.create({
+        websiteId: website._id,
+        type: "backup",
+        status: "success",
+        details: { objectKey: backupResult.objectKey, sizeBytes: backupResult.sizeBytes },
+      }).catch(() => undefined),
+      Log.create({
+        event: "backup",
+        status: "success",
+        message: "Backup created.",
+        websiteId: website._id,
+        metadata: { objectKey: backupResult.objectKey, sizeBytes: backupResult.sizeBytes },
+      }),
+    ]);
+
+    return NextResponse.json({
+      ok: true,
+      websiteId: website._id.toString(),
+      backupKey: backupResult.objectKey,
+      lastBackupAt: website.lastBackupAt.toISOString(),
+      downloadUrl,
     });
-
-    return NextResponse.json({ success: true, backupUrl });
   } catch (error) {
     console.error("Backup route error", error);
 
-    await MaintenanceLog.create({
-      websiteId: id,
-      type: "backup",
-      status: "fail",
-      details: {
-        message: error instanceof Error ? error.message : "Unknown error",
-      },
-    }).catch((logError) => {
-      console.error("Failed to write backup failure log", logError);
-    });
+    if (id && Types.ObjectId.isValid(id)) {
+      await Promise.all([
+        MaintenanceLog.create({
+          websiteId: id,
+          type: "backup",
+          status: "fail",
+          details: {
+            message: error instanceof Error ? error.message : "Backup failed",
+          },
+        }).catch(() => undefined),
+        Log.create({
+          event: "backup",
+          status: "failure",
+          message: "Backup failed.",
+          websiteId: id,
+          metadata: { message: error instanceof Error ? error.message : "Unknown error" },
+        }).catch(() => undefined),
+      ]).catch(() => undefined);
+    }
 
     return NextResponse.json(
-      { error: "Failed to back up site" },
-      { status: 500 }
+      { ok: false, error: "BACKUP_FAILED", message: "Failed to create backup." },
+      { status: 500 },
     );
   }
 }

@@ -39,6 +39,9 @@ export interface WebsiteDocument extends Document {
   previewUrl?: string;
   archiveUrl?: string;
   zipUrl?: string;
+  lastBackupAt?: Date;
+  lastBackupKey?: string;
+  lastBackupUrl?: string;
   errorReason?: string;
   plan: WebsitePlan;
   billingStatus: WebsiteBillingStatus;
@@ -76,6 +79,9 @@ const WebsiteSchema = new Schema<WebsiteDocument>(
     previewUrl: { type: String },
     archiveUrl: { type: String },
     zipUrl: { type: String },
+    lastBackupAt: { type: Date },
+    lastBackupKey: { type: String },
+    lastBackupUrl: { type: String },
     errorReason: { type: String },
     plan: {
       type: String,
