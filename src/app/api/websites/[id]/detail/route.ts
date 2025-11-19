@@ -64,6 +64,14 @@ export async function GET(_request: Request, { params }: { params: { id: string 
       billingStatus: website.billingStatus ?? null,
       errorReason: website.errorReason ?? null,
       zipUrl: website.zipUrl ?? null,
+      lastBackupAt:
+        website.lastBackupAt instanceof Date
+          ? website.lastBackupAt.toISOString()
+          : website.lastBackupAt
+            ? new Date(website.lastBackupAt).toISOString()
+            : null,
+      lastBackupKey: website.lastBackupKey ?? null,
+      lastBackupUrl: website.lastBackupUrl ?? null,
       files: Array.isArray(website.files)
         ? website.files.map((file) => ({
             path: file.path,

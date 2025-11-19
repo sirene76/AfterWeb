@@ -150,6 +150,65 @@ function WebsiteOverviewTab({
   website: WebsiteDetailSummary;
   latestReport: WebsiteReportSummary | null;
 }) {
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(website.lastBackupAt ?? null);
+  const [lastBackupKey, setLastBackupKey] = useState<string | null>(website.lastBackupKey ?? null);
+  const [backupError, setBackupError] = useState<string | null>(null);
+
+  const lastBackupLabel = lastBackupAt ? formatDate(lastBackupAt) : "Never backed up";
+  const canDownloadBackup = Boolean(lastBackupKey);
+
+  async function handleCreateBackup() {
+    setIsBackingUp(true);
+    setBackupError(null);
+    try {
+      const response = await fetch(`/api/backup/${website._id}`, { method: "POST" });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.message ?? "Backup failed");
+      }
+      setLastBackupAt(data.lastBackupAt ?? new Date().toISOString());
+      setLastBackupKey(data.backupKey ?? null);
+      if (data.downloadUrl) {
+        window.open(data.downloadUrl, "_blank", "noopener");
+      }
+    } catch (error) {
+      console.error(error);
+      setBackupError(error instanceof Error ? error.message : "Backup failed. Please try again.");
+      alert("Backup failed. Please try again.");
+    } finally {
+      setIsBackingUp(false);
+    }
+  }
+
+  async function handleDownloadBackup() {
+    if (!canDownloadBackup) {
+      return;
+    }
+    setIsDownloading(true);
+    setBackupError(null);
+    try {
+      const response = await fetch(`/api/backup/${website._id}/download`);
+      if (response.status === 404) {
+        setBackupError("No backup found for this website.");
+        alert("No backup found for this website.");
+        return;
+      }
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.ok || !data.downloadUrl) {
+        throw new Error(data?.message ?? "Failed to get download link");
+      }
+      window.open(data.downloadUrl, "_blank", "noopener");
+    } catch (error) {
+      console.error(error);
+      setBackupError(error instanceof Error ? error.message : "Failed to download backup.");
+      alert("Failed to download backup.");
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
   const stats = [
     { label: "Pages", value: latestReport?.pageCount ?? 0 },
     { label: "Assets", value: latestReport?.assetCount ?? 0 },
@@ -173,17 +232,31 @@ function WebsiteOverviewTab({
               <span aria-hidden>↗</span>
             </a>
           )}
-          {website.zipUrl && (
-            <a
-              href={website.zipUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="mt-3 inline-flex items-center gap-1 text-sm text-emerald-300 hover:text-emerald-200"
-            >
-              Download backup
-              <span aria-hidden>⬇</span>
-            </a>
-          )}
+          <div className="mt-6 border-t border-slate-800 pt-4">
+            <div className="flex flex-col gap-1">
+              <h4 className="text-sm font-semibold text-white">Backups</h4>
+              <p className="text-xs text-slate-400">Last backup: {lastBackupLabel}</p>
+              {backupError && <p className="text-xs text-rose-400">{backupError}</p>}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={handleCreateBackup}
+                disabled={isBackingUp}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-600/60"
+              >
+                {isBackingUp ? "Creating backup..." : "Create backup"}
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadBackup}
+                disabled={!canDownloadBackup || isDownloading}
+                className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-800/60"
+              >
+                {isDownloading ? "Preparing download..." : "Download last backup"}
+              </button>
+            </div>
+          </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <ScoreCard label="SEO score" score={latestReport?.seoScore ?? null} tone="emerald" />

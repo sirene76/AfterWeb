@@ -14,6 +14,9 @@ export interface WebsiteDetailSummary {
   billingStatus?: string | null;
   errorReason?: string | null;
   zipUrl?: string | null;
+  lastBackupAt?: string | null;
+  lastBackupKey?: string | null;
+  lastBackupUrl?: string | null;
   files?: WebsiteDetailFileEntry[];
   createdAt: string;
   updatedAt: string;
